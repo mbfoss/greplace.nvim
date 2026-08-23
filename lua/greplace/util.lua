@@ -38,6 +38,7 @@ function M.ensure_buf(path)
     end
     bufnr = vim.fn.bufadd(path)
     vim.fn.bufload(bufnr)
+    vim.bo[bufnr].buflisted = true
     if not vim.api.nvim_buf_is_loaded(bufnr) then
         return nil, "could not load: " .. path
     end

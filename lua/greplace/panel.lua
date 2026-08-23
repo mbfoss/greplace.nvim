@@ -194,8 +194,14 @@ local function create_buf(on_write)
     -- `vim.schedule`; one pending pass is enough however many lines changed.
     local pending = false
     vim.api.nvim_buf_attach(bufnr, false, {
-        on_lines = function()
+        on_lines = function(_, _, _, first, last_old, last_new)
             if not _state[bufnr] then return true end -- detach with the panel
+            -- A change confined to one line cannot make an anchor's region
+            -- empty or fill it again: no anchor moved relative to another, and
+            -- none was added or removed. That is every keystroke of ordinary
+            -- typing, and skipping it here keeps a large panel's edits from
+            -- paying for a full anchor scan per character.
+            if first + 1 == last_old and last_old == last_new then return end
             if pending then return end
             pending = true
             vim.schedule(function()
