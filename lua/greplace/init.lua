@@ -38,6 +38,9 @@ local function on_write(bufnr)
     local msg   = string.format("%d line(s) in %d buffer(s), unsaved",
         result.replaced, result.files)
     local level = vim.log.levels.INFO
+    if result.removed > 0 then
+        msg = msg .. string.format("; %d left alone (removed from the list)", result.removed)
+    end
     if result.skipped > 0 then
         msg   = msg .. string.format("; %d skipped (source line moved)", result.skipped)
         level = vim.log.levels.WARN

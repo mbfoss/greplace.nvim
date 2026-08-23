@@ -75,13 +75,15 @@ The anchor in front of a line owns everything from that line down to the next
 anchor, which makes the obvious edits mean the obvious thing:
 
 - **change the line** → the source line is rewritten
-- **delete the line** (`dd`) → the source line is deleted
+- **delete the line** (`dd`) → that match is dropped: its source line is left
+  exactly as it is
 - **split it into several lines** → the source line is replaced by all of them
-- **empty the panel** (`ggdG`) → every matched line is deleted
+- **empty the panel** (`ggdG`) → nothing is changed at all
 
-A deleted line's `file:line` disappears with it, so the locations left in the
-panel keep lining up with the lines they belong to. The deletion itself is
-still pending until you write: undo brings the line, and its location, back.
+Deleting lines is how you narrow a result set down to the matches you actually
+want to replace — it never removes anything from a file. The dropped line's
+`file:line` disappears with it, so the locations left in the panel keep lining
+up with the lines they belong to, and `u` brings both back.
 
 A line whose source has moved since the search (an edit elsewhere, a reload) is
 left untouched and reported as skipped. After a write the panel re-renders with

@@ -8,12 +8,17 @@ local util = require("greplace.util")
 -- Edits land in buffers only — a file with no buffer yet is loaded into one —
 -- and nothing is written to disk, so the result is reviewable (and undoable)
 -- before the user decides to `:wa`.
+--
+-- A match deleted from the panel is a match the user has taken out of the
+-- replacement: its source line is left alone, and it simply stops being listed.
+-- Nothing here ever removes a line from a file.
 -- ---------------------------------------------------------------------------
 
 ---@class greplace.ApplyResult
 ---@field replaced integer  source lines rewritten
 ---@field files    integer  buffers touched
 ---@field skipped  integer  regions dropped because the source line had moved
+---@field removed  integer  matches deleted from the panel, so left untouched
 ---@field entries  greplace.Entry[]  post-edit entries, in panel order
 
 ---@param bufnr integer
@@ -37,14 +42,24 @@ local function apply_file(path, regions, result, keep)
         return
     end
 
+    -- How many lines each region actually added to (or took from) the file, so
+    -- that only the edits that really happened shift the ones below them.
+    ---@type table<greplace.Region, integer>
+    local shift   = {}
     local touched = false
+
     for i = #regions, 1, -1 do
         local region = regions[i]
         local entry  = region.entry
         local lines  = region.lines
         local changed = #lines ~= 1 or lines[1] ~= entry.text
 
-        if not changed then
+        if #lines == 0 then
+            -- The match was deleted from the panel, which takes it out of the
+            -- replacement: the source line is left exactly as it is, and the
+            -- match drops off the list rather than coming back on the redraw.
+            result.removed = result.removed + 1
+        elseif not changed then
             keep[region] = true
         elseif line_at(bufnr, entry.lnum) ~= entry.text then
             -- The file moved under the panel (an edit elsewhere, a reload).
@@ -55,7 +70,8 @@ local function apply_file(path, regions, result, keep)
             vim.api.nvim_buf_set_lines(bufnr, entry.lnum - 1, entry.lnum, false, lines)
             result.replaced = result.replaced + 1
             touched         = true
-            keep[region]    = #lines > 0
+            keep[region]    = true
+            shift[region]   = #lines - 1
         end
     end
 
@@ -66,12 +82,11 @@ local function apply_file(path, regions, result, keep)
     local offset = 0
     for _, region in ipairs(regions) do
         local entry = region.entry
-        local lines = region.lines
         entry.lnum  = entry.lnum + offset
         if keep[region] then
             entry.text = line_at(bufnr, entry.lnum) or entry.text
         end
-        offset = offset + #lines - 1
+        offset = offset + (shift[region] or 0)
     end
 end
 
@@ -80,7 +95,7 @@ end
 ---@return greplace.ApplyResult
 function M.run(regions)
     ---@type greplace.ApplyResult
-    local result = { replaced = 0, files = 0, skipped = 0, entries = {} }
+    local result = { replaced = 0, files = 0, skipped = 0, removed = 0, entries = {} }
 
     ---@type table<string, greplace.Region[]>
     local by_file, order = {}, {}

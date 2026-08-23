@@ -33,14 +33,14 @@ local _ns_hl   = vim.api.nvim_create_namespace("greplace.match")
 ---@field root    string
 ---@field entries table<integer, greplace.Entry>  keyed by anchor extmark id
 ---@field virt    table<integer, table[]>  each anchor's virtual text chunks
----@field hidden  table<integer, boolean>  anchors whose line has been deleted
+---@field hidden  table<integer, boolean>  anchors whose line has been removed
 
 ---@type table<integer, greplace.PanelState>
 local _state = {}
 
 ---@class greplace.Region
 ---@field entry greplace.Entry
----@field lines string[]  replacement text: 0 lines deletes the source line
+---@field lines string[]  replacement text: 0 lines leaves the source alone
 
 ---@return integer? bufnr
 function M.find_buf()
@@ -63,9 +63,10 @@ function M.is_panel(bufnr)
     return _state[bufnr] ~= nil
 end
 
---- Which anchors have had their line deleted: an anchor owns the rows from its
+--- Which anchors have had their line removed: an anchor owns the rows from its
 --- own down to the next anchor's, so it is empty when the next one has caught
---- up with it (or when it has been pushed past the end of the buffer).
+--- up with it (or when it has been pushed past the end of the buffer). Removing
+--- a line drops that match from the replacement; it never touches the file.
 ---@param bufnr integer
 ---@param marks integer[][]  anchors in buffer order, as `nvim_buf_get_extmarks`
 ---@param total integer      the buffer's line count
@@ -73,7 +74,7 @@ end
 local function empty_anchors(bufnr, marks, total)
     -- A buffer emptied outright (`ggdG`) still holds one empty line, which
     -- would otherwise read as "blank out the last source line" rather than as
-    -- the deletion of every match that it plainly is.
+    -- the "drop every match" that it plainly is.
     local blank = total == 1
         and vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1] == ""
 
@@ -87,8 +88,8 @@ local function empty_anchors(bufnr, marks, total)
 end
 
 --- Show each anchor's location again, or hide it where the line it belonged to
---- has been deleted. Without this a deleted line's anchor -- which survives, so
---- that the write can delete the source line too -- would keep drawing its
+--- has been removed. Without this a removed line's anchor -- which survives, so
+--- that the write knows to leave that match out -- would keep drawing its
 --- `file:line` inline on whatever row it collapsed onto, stacked in front of
 --- that row's own location.
 ---@param bufnr integer
@@ -103,7 +104,7 @@ local function sync_virt(bufnr)
     for _, mark in ipairs(marks) do
         local id, row, col = mark[1], mark[2], mark[3]
         local hide = empty[id] or false
-        -- An anchor pushed past the last line (the final match's line deleted)
+        -- An anchor pushed past the last line (the final match's line removed)
         -- has no row to draw on and cannot be re-set at one either -- moving it
         -- back onto the last line would make the anchor above it look like the
         -- deleted one instead. It draws nothing as it is, so leave it be.
@@ -346,7 +347,8 @@ end
 
 --- Read the edited buffer back as one replacement region per anchor: the lines
 --- from an anchor's row up to the next anchor's row. A region of several lines
---- splits the source line; an empty region deletes it.
+--- splits the source line; an empty region -- the user deleted it from the
+--- panel -- leaves the source line alone.
 ---@param bufnr integer
 ---@return greplace.Region[] regions  in buffer order
 function M.regions(bufnr)

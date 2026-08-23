@@ -153,21 +153,27 @@ describe("greplace", function()
         assert.same({ "first", "second", "tail" }, buf_lines(a))
     end)
 
-    it("deletes a source line when its region is emptied", function()
+    it("leaves the source alone for a match deleted from the panel", function()
         local a = write_file("a.txt", { "hit one", "hit two", "tail" })
         local pbuf = panel.open(run_search("hit"), {
             query = "hit", root = _root, height = 10, on_write = function() end,
         })
         -- Drop the first result line; its anchor collapses onto the second.
         vim.api.nvim_buf_set_lines(pbuf, 0, 1, false, {})
+        edit_row(pbuf, 0, { "HIT two" })
 
         local result = apply.run(panel.regions(pbuf))
-        assert.same({ "hit two", "tail" }, buf_lines(a))
+        -- The first match is untouched, and only the second was rewritten.
+        assert.same({ "hit one", "HIT two", "tail" }, buf_lines(a))
+        assert.equals(1, result.replaced)
+        assert.equals(1, result.removed)
+        -- The dropped match is off the list rather than back on the redraw.
         assert.equals(1, #result.entries)
-        assert.equals(1, result.entries[1].lnum)
+        assert.equals(2, result.entries[1].lnum)
+        assert.equals("HIT two", result.entries[1].text)
     end)
 
-    it("drops the location of a deleted line, leaving the rest in place", function()
+    it("drops the location of a removed line, leaving the rest in place", function()
         write_file("a.txt", { "hit one", "hit two", "hit three" })
         local pbuf = panel.open(run_search("hit"), {
             query = "hit", root = _root, height = 10, on_write = function() end,
@@ -183,7 +189,7 @@ describe("greplace", function()
         assert.same({ false, false, "a.txt:3" }, locations(pbuf))
     end)
 
-    it("deletes the last source line when the last panel line goes", function()
+    it("leaves the last source line alone when the last panel line goes", function()
         local a = write_file("a.txt", { "hit one", "hit two" })
         local pbuf = panel.open(run_search("hit"), {
             query = "hit", root = _root, height = 10, on_write = function() end,
@@ -191,24 +197,43 @@ describe("greplace", function()
         delete_row(pbuf, 1)
         assert.same({ "a.txt:1", false }, locations(pbuf))
 
-        apply.run(panel.regions(pbuf))
-        assert.same({ "hit one" }, buf_lines(a))
+        local result = apply.run(panel.regions(pbuf))
+        assert.same({ "hit one", "hit two" }, buf_lines(a))
+        assert.equals(1, result.removed)
     end)
 
-    it("deletes every source line when the panel is emptied", function()
+    it("changes nothing when the panel is emptied", function()
         local a = write_file("a.txt", { "hit one", "keep", "hit two" })
         local pbuf = panel.open(run_search("hit"), {
             query = "hit", root = _root, height = 10, on_write = function() end,
         })
-        -- `ggdG` leaves one empty line behind, which means "everything is
-        -- gone", not "blank out the last match".
+        -- `ggdG` leaves one empty line behind, which means "drop every match",
+        -- not "blank out the last one".
         vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, {})
         vim.wait(100, function() return false end)
         assert.same({ false, false }, locations(pbuf))
 
         local result = apply.run(panel.regions(pbuf))
-        assert.same({ "keep" }, buf_lines(a))
+        assert.same({ "hit one", "keep", "hit two" }, buf_lines(a))
+        assert.equals(0, result.replaced)
+        assert.equals(2, result.removed)
         assert.equals(0, #result.entries)
+    end)
+
+    it("keeps line numbers right when an edit sits below a dropped match", function()
+        local a = write_file("a.txt", { "hit one", "mid", "hit two" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        -- Drop the first match, split the second: nothing was removed from the
+        -- file, so the second match's line number must not shift up.
+        delete_row(pbuf, 0)
+        edit_row(pbuf, 0, { "A", "B" })
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.same({ "hit one", "mid", "A", "B" }, buf_lines(a))
+        assert.equals(1, #result.entries)
+        assert.equals(3, result.entries[1].lnum)
     end)
 
     it("keeps later line numbers correct after a region grows", function()
