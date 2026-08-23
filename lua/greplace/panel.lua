@@ -178,6 +178,12 @@ local function create_buf(on_write)
     vim.api.nvim_create_autocmd("BufWriteCmd", {
         buffer = bufnr,
         desc   = "greplace: apply edits to buffers in memory",
+        -- `nested`, because the write loads the files it edits into buffers:
+        -- without it their `BufReadPost`/`FileType` never fire (autocommands
+        -- do not nest by default), so those buffers come up with no filetype
+        -- and hence no syntax, treesitter or LSP -- and stay that way, being
+        -- already loaded by the time the user opens one.
+        nested = true,
         callback = function() on_write(bufnr) end,
     })
     if config.options.keys.open and config.options.keys.open ~= "" then

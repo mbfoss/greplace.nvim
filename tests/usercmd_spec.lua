@@ -1,3 +1,7 @@
+-- Loaded up front: the specs `chdir` into a temp directory, and the plugin's
+-- own runtimepath entry is relative, so a lazy `require` mid-test would miss.
+require("greplace.apply")
+
 local usercmd  = require("greplace.util.usercmd")
 local greplace = require("greplace")
 local panel    = require("greplace.panel")
@@ -124,6 +128,20 @@ describe(":Greplace", function()
             if vim.api.nvim_win_get_buf(win) == bufnr then shown = true end
         end
         assert.is_true(shown)
+    end)
+
+    it("loads edited files with their filetype set", function()
+        write_file("a.lua", { "local hit = 1" })
+        local pbuf = assert(run("Greplace search hit"))
+        -- Write through the panel's own `BufWriteCmd`, the path that loads the
+        -- file: the events it fires only reach the new buffer if that autocmd
+        -- is `nested`, and without them the file arrives with no filetype and
+        -- so no syntax, treesitter or LSP.
+        vim.api.nvim_buf_set_text(pbuf, 0, 0, 0, 0, { "-- " })
+        vim.cmd("silent write")
+
+        local target = assert(require("greplace.util").find_buf(_root .. "/a.lua"))
+        assert.equals("lua", vim.bo[target].filetype)
     end)
 
     it("completes its subcommands", function()
