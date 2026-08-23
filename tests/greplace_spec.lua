@@ -32,6 +32,32 @@ local function buf_lines(path)
     return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 end
 
+--- The location each anchor is currently drawing, in buffer order, with a
+--- deleted line's anchor showing as `false`.
+---@param bufnr integer
+---@return (string|boolean)[]
+local function locations(bufnr)
+    local ns    = vim.api.nvim_get_namespaces()["greplace.anchor"]
+    local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+    local out   = {}
+    for i, mark in ipairs(marks) do
+        local virt = mark[4].virt_text
+        -- An anchor pushed past the last line has nothing to draw on.
+        out[i] = mark[2] < vim.api.nvim_buf_line_count(bufnr) and virt ~= nil
+            and virt[1][1] or false
+    end
+    return out
+end
+
+--- Delete panel row `row` (0-indexed) as `dd` would, and let the deferred
+--- redraw of the anchors run.
+---@param bufnr integer
+---@param row   integer
+local function delete_row(bufnr, row)
+    vim.api.nvim_buf_set_lines(bufnr, row, row + 1, false, {})
+    vim.wait(100, function() return false end)
+end
+
 --- Rewrite one panel row the way a user editing it would: an in-line change,
 --- not a line-wise delete-and-insert (which would collapse the anchors).
 ---@param bufnr integer
@@ -139,6 +165,50 @@ describe("greplace", function()
         assert.same({ "hit two", "tail" }, buf_lines(a))
         assert.equals(1, #result.entries)
         assert.equals(1, result.entries[1].lnum)
+    end)
+
+    it("drops the location of a deleted line, leaving the rest in place", function()
+        write_file("a.txt", { "hit one", "hit two", "hit three" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        assert.same({ "a.txt:1", "a.txt:2", "a.txt:3" }, locations(pbuf))
+
+        delete_row(pbuf, 1)
+        -- The middle anchor collapsed onto the last line; only the line that
+        -- is really there still shows its location.
+        assert.same({ "a.txt:1", false, "a.txt:3" }, locations(pbuf))
+
+        delete_row(pbuf, 0)
+        assert.same({ false, false, "a.txt:3" }, locations(pbuf))
+    end)
+
+    it("deletes the last source line when the last panel line goes", function()
+        local a = write_file("a.txt", { "hit one", "hit two" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        delete_row(pbuf, 1)
+        assert.same({ "a.txt:1", false }, locations(pbuf))
+
+        apply.run(panel.regions(pbuf))
+        assert.same({ "hit one" }, buf_lines(a))
+    end)
+
+    it("deletes every source line when the panel is emptied", function()
+        local a = write_file("a.txt", { "hit one", "keep", "hit two" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        -- `ggdG` leaves one empty line behind, which means "everything is
+        -- gone", not "blank out the last match".
+        vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, {})
+        vim.wait(100, function() return false end)
+        assert.same({ false, false }, locations(pbuf))
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.same({ "keep" }, buf_lines(a))
+        assert.equals(0, #result.entries)
     end)
 
     it("keeps later line numbers correct after a region grows", function()

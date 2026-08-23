@@ -5,7 +5,7 @@
 Project-wide search and replace by editing the grep results.
 
 ```
-:Gsearch <query>
+:Greplace search <query>
 ```
 
 greps the working tree and collects every matching line into a split named
@@ -42,18 +42,32 @@ from being undone.
 }
 ```
 
-`setup()` is optional; the `:Gsearch` command registers itself.
+`setup()` is optional; the `:Greplace` command registers itself, and nothing
+under `lua/greplace/` is loaded until it is first run or completed.
 
 ## Usage
 
 | Command | Effect |
 | --- | --- |
-| `:Gsearch foo bar` | literal search for `foo bar` (smart-case) |
-| `:Gsearch! ^fn\s+\w+` | the query is a regex |
-| `:Gsearch` | re-run the last query, discarding unapplied edits |
+| `:Greplace search foo bar` | literal search for `foo bar` (smart-case) |
+| `:Greplace! search ^fn\s+\w+` | the query is a regex |
+| `:Greplace refresh` | re-run the last query, discarding unapplied edits |
+
+Everything after `search` is the query, verbatim — spaces, quotes and
+backslashes included. `<Tab>` completes the subcommands.
 
 Files that are open in a buffer are searched from their current, unsaved text,
 not from disk — their locations are marked with a distinct highlight.
+
+### Mappings
+
+| Key | Effect |
+| --- | --- |
+| `<CR>` | open the source of the line under the cursor, at that line and column |
+
+The file opens in a regular window — the panel keeps its own, and is never
+opened over. Set `keys.open` to a different key, or to `false`, to change or
+drop the mapping.
 
 ### Editing rules
 
@@ -63,6 +77,11 @@ anchor, which makes the obvious edits mean the obvious thing:
 - **change the line** → the source line is rewritten
 - **delete the line** (`dd`) → the source line is deleted
 - **split it into several lines** → the source line is replaced by all of them
+- **empty the panel** (`ggdG`) → every matched line is deleted
+
+A deleted line's `file:line` disappears with it, so the locations left in the
+panel keep lining up with the lines they belong to. The deletion itself is
+still pending until you write: undo brings the line, and its location, back.
 
 A line whose source has moved since the search (an edit elsewhere, a reload) is
 left untouched and reported as skipped. After a write the panel re-renders with
@@ -74,6 +93,9 @@ the applied text and corrected line numbers.
 require("greplace").setup({
   height = 15,   -- height of the result split
   limit  = 2000, -- maximum matches collected per search
+  keys = {
+    open = "<CR>", -- open the source of the line under the cursor
+  },
 })
 ```
 
