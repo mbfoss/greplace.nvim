@@ -1,5 +1,7 @@
 # greplace.nvim
 
+> WORK IN PROGRESS
+
 Project-wide search and replace by editing the grep results.
 
 ```
