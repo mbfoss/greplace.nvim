@@ -14,6 +14,7 @@ local M = {}
 local config   = require("greplace.config")
 local util     = require("greplace.util")
 local ui       = require("greplace.util.ui")
+local throttle = require("greplace.util.throttle")
 
 local _NAME    = "greplace://replace"
 local _ns      = vim.api.nvim_create_namespace("greplace.anchor")
@@ -132,6 +133,81 @@ local function sync_virt(bufnr)
     end
 end
 
+---@class greplace.Stats
+---@field files   integer  distinct files still listed
+---@field lines   integer  matches still listed (a removed one does not count)
+---@field changes integer  listed matches whose text no longer matches the source
+
+--- Count what the panel currently holds. A removed line drops out of every
+--- count -- it is no longer part of the replacement -- and a match whose region
+--- has grown to several lines is still one changed match, not several.
+---@param bufnr integer
+---@return greplace.Stats?  nil when the buffer is not a rendered panel
+function M.stats(bufnr)
+    local state = _state[bufnr]
+    if not state then return end
+
+    -- One read of the whole buffer rather than one per anchor: this runs on
+    -- every edit that could move an anchor, and a result list can be long.
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local total = #lines
+    local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, 0, -1, {})
+    local empty = empty_anchors(bufnr, marks, total)
+
+    local files, stats = {}, { files = 0, lines = 0, changes = 0 }
+    for i, mark in ipairs(marks) do
+        local id, row = mark[1], mark[2]
+        local entry   = state.entries[id]
+        if entry and not empty[id] then
+            local stop = marks[i + 1] and marks[i + 1][2] or total
+            stats.lines = stats.lines + 1
+            if not files[entry.path] then
+                files[entry.path] = true
+                stats.files = stats.files + 1
+            end
+            -- Unchanged means exactly one line, holding what was rendered.
+            if stop ~= row + 1 or lines[row + 1] ~= entry.text then
+                stats.changes = stats.changes + 1
+            end
+        end
+    end
+    return stats
+end
+
+---@param n    integer
+---@param word string
+---@return string  "1 file", "2 files"
+local function plural(n, word)
+    return string.format("%d %s", n, n == 1 and word or word .. "s")
+end
+
+--- Draw the panel's winbar: what the panel currently holds, left-aligned.
+--- `status` stands in while there is nothing to count -- the search is still
+--- running, or it produced no list.
+---@param bufnr  integer
+---@param status string?
+local function set_winbar(bufnr, status)
+    if not config.options.winbar then return end
+    if not _state[bufnr] then return end
+
+    local text = status
+    if not text then
+        local st = M.stats(bufnr)
+        text = st and string.format("%s  %s  %s",
+            plural(st.files, "file"), plural(st.lines, "line"),
+            plural(st.changes, "change")) or ""
+    end
+
+    -- Trailing `%=` so the text sits left and the highlight does not run on
+    -- past it; `status` is plugin text, so there is no `%` to escape.
+    local bar = string.format(" %%#GreplaceSeparator#%s%%=", text)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_buf(win) == bufnr then
+            vim.wo[win].winbar = bar
+        end
+    end
+end
+
 --- The match a buffer row belongs to: the nearest anchor at or above `row`,
 --- since an anchor owns everything from its own row down to the next one.
 ---@param bufnr integer
@@ -208,9 +284,18 @@ local function create_buf(on_write)
     -- Its callback runs in a context where the API is off limits, hence the
     -- `vim.schedule`; one pending pass is enough however many lines changed.
     local pending = false
+    -- The counts do move on a single-line edit -- typing into a line is what
+    -- makes it a change -- so unlike `sync_virt` the winbar cannot skip those.
+    -- Throttled instead, since it costs a scan of every anchor and no one reads
+    -- a counter mid-keystroke. `on_lines` runs where the API is off limits,
+    -- hence the `vim.schedule` inside the throttled body rather than around it.
+    local bump = throttle.throttle_wrap(120, function()
+        vim.schedule(function() set_winbar(bufnr) end)
+    end)
     vim.api.nvim_buf_attach(bufnr, false, {
         on_lines = function(_, _, _, first, last_old, last_new)
             if not _state[bufnr] then return true end -- detach with the panel
+            bump()
             -- A change confined to one line cannot make an anchor's region
             -- empty or fill it again: no anchor moved relative to another, and
             -- none was added or removed. That is every keystroke of ordinary
@@ -314,6 +399,7 @@ local function render(bufnr, matches)
     end
 
     vim.bo[bufnr].modified = false
+    set_winbar(bufnr)
 end
 
 --- Put a one-line status in the panel: the buffer holds a single blank,
@@ -345,6 +431,7 @@ end
 ---@param hl    string?
 function M.set_message(bufnr, msg, hl)
     set_status(bufnr, { { msg, hl or "GreplaceSeparator" } })
+    set_winbar(bufnr, msg)
 end
 
 --- Open the panel before there are any results, showing the query and that the
@@ -362,6 +449,7 @@ function M.open_loading(opts)
         hidden  = {},
     }
     show(bufnr, opts.height)
+    set_winbar(bufnr, "searching ...")
     set_status(bufnr, {
         { "searching for ", "GreplaceSeparator" },
         { opts.query,       "GreplaceMatch" },

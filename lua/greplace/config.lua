@@ -17,12 +17,14 @@ local M = {}
 ---@class greplace.Config
 ---@field height integer  height of the result split
 ---@field limit  integer  maximum matches collected per search
+---@field winbar boolean  show the query and the panel's counts in a winbar
 ---@field keys   greplace.Keys
 
 ---@type greplace.Config
 local _defaults = {
     height = 15,
     limit  = 2000,
+    winbar = true,
     keys   = {
         open = "<CR>",
     },

@@ -276,6 +276,41 @@ describe("greplace", function()
         assert.equals(first, second)
     end)
 
+    it("counts files, lines and changes for the winbar", function()
+        write_file("a.txt", { "hit one", "hit two" })
+        write_file("b.txt", { "hit three" })
+        local bufnr = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        assert.same({ files = 2, lines = 3, changes = 0 }, panel.stats(bufnr))
+
+        -- An edited line is one change.
+        edit_row(bufnr, 0, { "HIT one" })
+        assert.same({ files = 2, lines = 3, changes = 1 }, panel.stats(bufnr))
+
+        -- A region grown to several lines is still one changed match.
+        edit_row(bufnr, 1, { "hit", "two" })
+        assert.same({ files = 2, lines = 3, changes = 2 }, panel.stats(bufnr))
+
+        -- A removed line leaves every count, and takes its file with it when it
+        -- was that file's last match.
+        delete_row(bufnr, 3)
+        assert.same({ files = 1, lines = 2, changes = 2 }, panel.stats(bufnr))
+    end)
+
+    it("draws the counts in the panel's winbar", function()
+        write_file("a.txt", { "hit one" })
+        greplace.open("hit")
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            return next(panel.state(bufnr).entries) ~= nil
+        end, 20))
+
+        local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        assert.is_truthy(winbar:find("1 file  1 line  0 changes", 1, true))
+        assert.is_nil(winbar:find("hit", 1, true))
+    end)
+
     it("reports nothing once the search has been cancelled", function()
         write_file("a.txt", { "hit one" })
         local fired = false
