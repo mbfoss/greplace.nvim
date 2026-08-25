@@ -234,6 +234,23 @@ function M.run(query, opts, callback)
     local errs      = {}
     local cancelled = false
     local finished  = false
+    local truncated = false
+    local limit     = opts.limit
+
+    local handles = {} ---@type keystone.util.SpawnHandle[]
+
+    --- Collect one match, and stop both rg processes once `limit` of them have
+    --- arrived. Without this the limit was only a slice applied at the end, so
+    --- a query with millions of hits in a large tree decoded and retained every
+    --- one of them before showing 2000 -- which is what made big projects hang.
+    ---@param m greplace.Match
+    local function add(m)
+        matches[#matches + 1] = m
+        if limit and not truncated and #matches >= limit then
+            truncated = true
+            for _, h in ipairs(handles) do h.kill() end
+        end
+    end
 
     local function done()
         pending = pending - 1
@@ -247,25 +264,24 @@ function M.run(query, opts, callback)
             if a.relpath ~= b.relpath then return a.relpath < b.relpath end
             return a.lnum < b.lnum
         end)
-        if opts.limit and #matches > opts.limit then
-            matches = vim.list_slice(matches, 1, opts.limit)
+        if limit and #matches > limit then
+            matches = vim.list_slice(matches, 1, limit)
         end
         callback(matches)
     end
 
-    local handles = {} ---@type keystone.util.SpawnHandle[]
-
     local function on_pass_done(err)
         if cancelled then return end
-        if err then errs[#errs + 1] = err end
+        -- A pass we killed ourselves dies by SIGTERM; that is not a failure.
+        if err and not truncated then errs[#errs + 1] = err end
         done()
     end
 
     -- Disk pass.
     local dir_cmd = rg_base(opts)
-    vim.list_extend(dir_cmd, { "--sort", "path", "--", query, "." })
+    vim.list_extend(dir_cmd, { "--", query, "." })
     handles[#handles + 1] = rg_json(dir_cmd, root, nil, function(m)
-        if not cancelled and not open[m.path] then matches[#matches + 1] = m end
+        if not cancelled and not truncated and not open[m.path] then add(m) end
     end, on_pass_done)
 
     -- Open-buffer pass: one process fed every buffer's current text.
@@ -281,14 +297,14 @@ function M.run(query, opts, callback)
         local buf_cmd = rg_base(opts)
         vim.list_extend(buf_cmd, { "--", query, "-" })
         handles[#handles + 1] = rg_json(buf_cmd, root, table.concat(chunks, "\n"), function(m)
-            if cancelled then return end
+            if cancelled or truncated then return end
             local b, lnum = locate(bufs, starts, m.lnum)
             if b and lnum then
                 m.path    = b.path
                 m.relpath = M.relative_path(b.path, root)
                 m.lnum    = lnum
                 m.bufnr   = b.bufnr
-                matches[#matches + 1] = m
+                add(m)
             end
         end, on_pass_done)
     end

@@ -16,10 +16,12 @@ local function write_file(rel, lines)
 end
 
 ---@param query string
+---@param opts  greplace.SearchOpts?
 ---@return greplace.Match[]
-local function run_search(query)
+local function run_search(query, opts)
     local result, done
-    search.run(query, { cwd = _root }, function(matches, err)
+    opts = vim.tbl_extend("keep", opts or {}, { cwd = _root })
+    search.run(query, opts, function(matches, err)
         result, done = matches or { err = err }, true
     end)
     assert.is_true(vim.wait(5000, function() return done end, 20))
@@ -90,6 +92,14 @@ describe("greplace", function()
         assert.equals(2, matches[1].lnum)
         assert.equals("hit one", matches[1].text)
         assert.is_nil(matches[1].bufnr)
+    end)
+
+    it("stops collecting once the match limit is reached", function()
+        local lines = {}
+        for i = 1, 500 do lines[i] = "hit " .. i end
+        write_file("big.txt", lines)
+        local matches = run_search("hit", { limit = 5 })
+        assert.equals(5, #matches)
     end)
 
     it("searches unsaved buffer text instead of the file on disk", function()
