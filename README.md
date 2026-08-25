@@ -5,7 +5,7 @@
 Project-wide search and replace by editing the grep results.
 
 ```
-:Gsearch <query>
+:Greplace <query>
 ```
 
 greps the working tree and collects every matching line into a split named
@@ -42,18 +42,18 @@ from being undone.
 }
 ```
 
-`setup()` is optional; the `:Gsearch` command registers itself, and nothing
+`setup()` is optional; the `:Greplace` command registers itself, and nothing
 under `lua/greplace/` is loaded until it is first run.
 
 ## Usage
 
 | Command | Effect |
 | --- | --- |
-| `:Gsearch foo bar` | literal search for `foo bar` (smart-case) |
-| `:Gsearch! ^fn\s+\w+` | the query is a regex |
-| `:Gsearch` | with no query: re-run the last one, discarding unapplied edits |
+| `:Greplace foo bar` | literal search for `foo bar` (smart-case) |
+| `:Greplace! ^fn\s+\w+` | the query is a regex |
+| `:Greplace` | with no query: re-run the last one, discarding unapplied edits |
 
-Everything after `:Gsearch` is the query, verbatim — spaces, quotes and
+Everything after `:Greplace` is the query, verbatim — spaces, quotes and
 backslashes included.
 
 The panel opens as soon as the search is triggered and says that it is

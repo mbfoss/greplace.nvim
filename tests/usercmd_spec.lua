@@ -16,7 +16,7 @@ local function write_file(rel, lines)
     vim.fn.writefile(lines, path)
 end
 
---- Run `:Gsearch ...` and wait for its results. The panel goes up
+--- Run `:Greplace ...` and wait for its results. The panel goes up
 --- immediately, showing that a search is running, so its mere existence says
 --- nothing: wait for it to hold matches.
 ---@param cmd string
@@ -76,7 +76,7 @@ describe("greplace.util.usercmd", function()
     end)
 end)
 
-describe(":Gsearch", function()
+describe(":Greplace", function()
     before_each(function()
         local tmp = vim.fn.tempname()
         vim.fn.mkdir(tmp, "p")
@@ -92,7 +92,7 @@ describe(":Gsearch", function()
 
     it("opens the panel with a status line before the results arrive", function()
         write_file("a.txt", { "alpha beta" })
-        vim.cmd("Gsearch alpha")
+        vim.cmd("Greplace alpha")
 
         -- Synchronously after the command: the search has not run yet.
         local bufnr = assert(panel.find_buf())
@@ -112,23 +112,23 @@ describe(":Gsearch", function()
 
     it("searches for the whole command line as one literal query", function()
         write_file("a.txt", { "alpha beta", "alpha", "gamma" })
-        local bufnr = assert(run("Gsearch alpha beta"))
+        local bufnr = assert(run("Greplace alpha beta"))
         assert.are.same({ "alpha beta" }, panel_lines(bufnr))
     end)
 
     it("treats the query as a regex with a bang", function()
         write_file("a.txt", { "alpha beta", "alpha", "gamma" })
-        local bufnr = assert(run([[Gsearch! ^alpha\s+\w+]]))
+        local bufnr = assert(run([[Greplace! ^alpha\s+\w+]]))
         assert.are.same({ "alpha beta" }, panel_lines(bufnr))
     end)
 
     it("re-runs the last query when given no query", function()
         write_file("a.txt", { "hit one" })
-        local bufnr = assert(run("Gsearch hit"))
+        local bufnr = assert(run("Greplace hit"))
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "scribbled over" })
 
         write_file("b.txt", { "hit two" })
-        vim.cmd("Gsearch")
+        vim.cmd("Greplace")
         assert.is_true(vim.wait(5000, function()
             return #panel_lines(bufnr) == 2
         end, 20))
@@ -139,7 +139,7 @@ describe(":Gsearch", function()
 
     it("opens the source of the line under the cursor on <CR>", function()
         write_file("a.txt", { "one", "alpha beta", "three" })
-        local bufnr = assert(run("Gsearch alpha"))
+        local bufnr = assert(run("Greplace alpha"))
         vim.api.nvim_win_set_cursor(0, { 1, 6 })
         vim.api.nvim_feedkeys(
             vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
@@ -157,7 +157,7 @@ describe(":Gsearch", function()
 
     it("loads edited files with their filetype set", function()
         write_file("a.lua", { "local hit = 1" })
-        local pbuf = assert(run("Gsearch hit"))
+        local pbuf = assert(run("Greplace hit"))
         -- Write through the panel's own `BufWriteCmd`, the path that loads the
         -- file: the events it fires only reach the new buffer if that autocmd
         -- is `nested`, and without them the file arrives with no filetype and

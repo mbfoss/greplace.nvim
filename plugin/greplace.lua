@@ -2,7 +2,7 @@ if vim.fn.has("nvim-0.11") ~= 1 then
     error("greplace.nvim requires Neovim >= 0.11")
 end
 
--- `:Gsearch` is registered here at startup without requiring any Lua: the
+-- `:Greplace` is registered here at startup without requiring any Lua: the
 -- callback pulls in what it needs on first use. `util/usercmd` is the command
 -- plumbing -- it reports an error from the command body as a notification
 -- rather than a stack trace -- and `greplace` is the plugin proper, the search,
@@ -12,7 +12,7 @@ end
 local usercmd ---@type table?
 local greplace ---@type table?
 
-vim.api.nvim_create_user_command("Gsearch", function(opts)
+vim.api.nvim_create_user_command("Greplace", function(opts)
     usercmd = usercmd or require("greplace.util.usercmd")
     usercmd.handle(opts, function(cmd, _, cmd_opts)
         greplace = greplace or require("greplace")

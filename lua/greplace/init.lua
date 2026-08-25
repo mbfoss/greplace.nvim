@@ -3,14 +3,14 @@ local M = {}
 -- ---------------------------------------------------------------------------
 -- greplace
 --
--- `:Gsearch <query>` greps the working tree and collects every matching line
+-- `:Greplace <query>` greps the working tree and collects every matching line
 -- into a `greplace://replace` split. The lines are plain, editable text (the
 -- `file:line` prefix is virtual), and writing the buffer pushes each edited
 -- line back to its source — in buffers, never to disk.
 --
---   Gsearch[!] <query>   grep for <query> (`!` treats it as a regex)
---   Gsearch              with no query: re-run the last one, discarding
---                        unapplied edits
+--   Greplace[!] <query>   grep for <query> (`!` treats it as a regex)
+--   Greplace               with no query: re-run the last one, discarding
+--                          unapplied edits
 --
 -- This module owns the command body, as `M.run`, plus the API it is a thin
 -- skin over (`M.open`, `M.refresh`); the command itself is registered in
@@ -93,7 +93,7 @@ function M.open(query, opts)
 
     -- Wiping the panel ends the search that was filling it. The augroup is
     -- cleared per search, so the buffer never accumulates one autocommand per
-    -- `:Gsearch` (it is reused across them).
+    -- `:Greplace` (it is reused across them).
     vim.api.nvim_create_autocmd("BufWipeout", {
         group    = vim.api.nvim_create_augroup("greplace.search", { clear = true }),
         buffer   = bufnr,
@@ -135,7 +135,7 @@ function M.refresh()
     M.open(state.query, { regex = state.regex, cwd = state.root })
 end
 
---- `:Gsearch`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
+--- `:Greplace`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
 --- so that `plugin/greplace.lua` can register the command without this module
 --- being loaded: it hands `util/usercmd` a wrapper that requires us on the
 --- first invocation.
