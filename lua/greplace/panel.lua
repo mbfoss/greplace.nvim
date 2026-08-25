@@ -392,6 +392,25 @@ local function location_width(matches)
     return math.min(width, math.max(config.options.path_width or width, 2))
 end
 
+--- Rewrite the whole buffer with undo turned off, so that `u` cannot walk back
+--- past what was just drawn. The panel reuses one buffer across searches and
+--- across the loading status that precedes each of them, and every one of those
+--- is a write of the whole buffer: without this, an undo from a freshly
+--- rendered result list restores the previous search -- or the blank
+--- "searching ..." line -- and leaves anchors pointing at rows that no longer
+--- hold their match. A change made while `undolevels` is -1 clears the undo
+--- history along with itself (`:h clear-undo`), which is exactly the state the
+--- panel wants: editable from here on, with nothing behind it.
+---@param bufnr integer
+---@param lines string[]
+local function set_lines_no_undo(bufnr, lines)
+    local levels = vim.api.nvim_get_option_value("undolevels", { buf = bufnr })
+    vim.api.nvim_set_option_value("undolevels", -1, { buf = bufnr })
+    local ok, err = pcall(vim.api.nvim_buf_set_lines, bufnr, 0, -1, false, lines)
+    vim.api.nvim_set_option_value("undolevels", levels, { buf = bufnr })
+    if not ok then error(err) end
+end
+
 --- Write the match list into the panel buffer and (re)anchor one extmark per
 --- match. Entries are keyed by the returned extmark ids.
 ---@param bufnr   integer
@@ -405,7 +424,7 @@ local function render(bufnr, matches)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+    set_lines_no_undo(bufnr, lines)
 
     local width   = location_width(matches)
     state.entries = {}
@@ -462,7 +481,7 @@ local function set_status(bufnr, chunks)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "" })
+    set_lines_no_undo(bufnr, { "" })
     vim.api.nvim_buf_set_extmark(bufnr, _ns_st, 0, 0, {
         virt_text     = chunks,
         virt_text_pos = "inline",
