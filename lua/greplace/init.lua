@@ -102,7 +102,7 @@ function M.open(query, opts)
     })
 
     _cancel = search.run(query, { cwd = root, regex = opts.regex, limit = config.options.limit },
-        function(matches, err)
+        function(matches, err, truncated)
             _cancel = nil
             vim.schedule(function()
                 -- The panel can have been closed while the search ran.
@@ -118,6 +118,7 @@ function M.open(query, opts)
                     return
                 end
                 if not live then return end
+                args.truncated = truncated
                 panel.open(matches, args)
             end)
         end)

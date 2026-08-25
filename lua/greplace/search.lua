@@ -212,7 +212,9 @@ end
 --- late. Cancelling after the callback has already fired is a no-op.
 ---@param query    string
 ---@param opts     greplace.SearchOpts
----@param callback fun(matches:greplace.Match[]?, err:string?)
+---@param callback fun(matches:greplace.Match[]?, err:string?, truncated:boolean?)
+---                  `truncated` is true when collection stopped at `limit`, so
+---                  the list is only the first `limit` matches of more
 ---@return fun()? cancel  aborts both rg processes; nil if none were started
 function M.run(query, opts, callback)
     if query == "" then
@@ -266,7 +268,7 @@ function M.run(query, opts, callback)
             if a.relpath ~= b.relpath then return a.relpath < b.relpath end
             return a.lnum < b.lnum
         end)
-        callback(matches)
+        callback(matches, nil, truncated)
     end
 
     local function on_pass_done(err)

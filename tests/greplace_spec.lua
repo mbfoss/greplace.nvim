@@ -321,6 +321,32 @@ describe("greplace", function()
         assert.is_nil(winbar:find("hit", 1, true))
     end)
 
+    it("says so in the winbar when the match limit cut the list short", function()
+        local lines = {}
+        for i = 1, 20 do lines[i] = "hit " .. i end
+        write_file("big.txt", lines)
+        require("greplace.config").setup({ limit = 5 })
+
+        greplace.open("hit")
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            return next(panel.state(bufnr).entries) ~= nil
+        end, 20))
+
+        local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        assert.is_truthy(winbar:find("limit of 5 reached", 1, true))
+
+        -- A search that fits says nothing about a limit.
+        require("greplace.config").setup({ limit = 10000 })
+        greplace.open("hit 1")
+        assert.is_true(vim.wait(5000, function()
+            local st = panel.state(bufnr)
+            return st ~= nil and not st.truncated and next(st.entries) ~= nil
+        end, 20))
+        winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        assert.is_nil(winbar:find("limit", 1, true))
+    end)
+
     it("reports nothing once the search has been cancelled", function()
         write_file("a.txt", { "hit one" })
         local fired = false

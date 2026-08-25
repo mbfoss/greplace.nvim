@@ -102,7 +102,8 @@ the applied text and corrected line numbers.
 ```lua
 require("greplace").setup({
   height     = 15,    -- height of the result split
-  limit      = 10000, -- maximum matches collected per search
+  limit      = 10000, -- maximum matches collected per search; a search that
+                      -- hits it says so in the winbar
   winbar     = true,  -- show the panel's counts in a winbar
   path_width = 60,    -- greatest width of the `file:line` column, in cells
   keys = {
@@ -120,6 +121,7 @@ require("greplace").setup({
 | `GreplaceBufferLocation` | `Special` | `file:line` of a match in an open buffer |
 | `GreplaceSeparator` | `Comment` | the `│` between location and text |
 | `GreplaceMatch` | `Search` | the matched text itself |
+| `GreplaceLimit` | `WarningMsg` | the winbar's "limit of N reached" note |
 
 ## Development
 

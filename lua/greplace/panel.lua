@@ -44,6 +44,8 @@ local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
 ---@field entries table<integer, greplace.Entry>  keyed by anchor extmark id
 ---@field virt    table<integer, table[]>  each anchor's virtual text chunks
 ---@field hidden  table<integer, boolean>  anchors whose line has been removed
+---@field truncated boolean  the search stopped at the match limit, so this is
+---                          the first `limit` matches of more
 
 ---@type table<integer, greplace.PanelState>
 local _state = {}
@@ -199,9 +201,20 @@ local function set_winbar(bufnr, status)
             plural(st.changes, "change")) or ""
     end
 
+    -- A truncated list is a partial answer to the query, and one that stays
+    -- partial: the matches beyond the limit were never collected, so nothing
+    -- in the panel hints at them. Say so for as long as the panel holds that
+    -- list -- including while the counts move under editing, since those counts
+    -- are what would otherwise read as the whole story.
+    local limit = ""
+    if _state[bufnr].truncated then
+        limit = string.format("  %%#GreplaceLimit#limit of %d reached",
+            config.options.limit)
+    end
+
     -- Trailing `%=` so the text sits left and the highlight does not run on
     -- past it; `status` is plugin text, so there is no `%` to escape.
-    local bar = string.format(" %%#GreplaceSeparator#%s%%=", text)
+    local bar = string.format(" %%#GreplaceSeparator#%s%s%%=", text, limit)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(win) == bufnr then
             vim.wo[win].winbar = bar
@@ -515,6 +528,7 @@ function M.open_loading(opts)
         entries = {},
         virt    = {},
         hidden  = {},
+        truncated = false,
     }
     show(bufnr, opts.height)
     set_winbar(bufnr, "searching ...")
@@ -528,7 +542,7 @@ end
 
 --- Open (or reuse) the panel for a result set.
 ---@param matches  greplace.Match[]
----@param opts     { query:string, regex:boolean?, root:string, height:integer, on_write:fun(bufnr:integer) }
+---@param opts     { query:string, regex:boolean?, root:string, height:integer, truncated:boolean?, on_write:fun(bufnr:integer) }
 ---@return integer bufnr
 function M.open(matches, opts)
     local bufnr = M.find_buf() or create_buf(opts.on_write)
@@ -536,9 +550,10 @@ function M.open(matches, opts)
         query   = opts.query,
         regex   = opts.regex or false,
         root    = opts.root,
-        entries = {},
-        virt    = {},
-        hidden  = {},
+        entries   = {},
+        virt      = {},
+        hidden    = {},
+        truncated = opts.truncated or false,
     }
     show(bufnr, opts.height)
     render(bufnr, matches)
@@ -605,6 +620,7 @@ function M.setup_highlights()
         GreplaceBufferLocation = { link = "Special" },
         GreplaceSeparator      = { link = "Comment" },
         GreplaceMatch          = { link = "Search" },
+        GreplaceLimit          = { link = "WarningMsg" },
     }
     for name, def in pairs(defaults) do
         vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))
