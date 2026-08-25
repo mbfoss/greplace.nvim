@@ -14,6 +14,7 @@ local M = {}
 local config   = require("greplace.config")
 local util     = require("greplace.util")
 local ui       = require("greplace.util.ui")
+local strutil  = require("greplace.util.strutil")
 local throttle = require("greplace.util.throttle")
 
 local _NAME    = "greplace://replace"
@@ -244,6 +245,39 @@ local function jump(bufnr)
     end
 end
 
+--- Show everything the panel had to leave out about the line under the cursor:
+--- the full path (the panel's own column is cropped), where the match came
+--- from, and the source line as it was when the panel rendered it -- what the
+--- write compares against, so it is worth being able to see.
+---@param bufnr integer
+local function hover(bufnr)
+    local row   = vim.api.nvim_win_get_cursor(0)[1]
+    local entry = M.entry_at(bufnr, row - 1)
+    if not entry then
+        vim.notify("greplace: no match on this line", vim.log.levels.WARN)
+        return
+    end
+
+    local loaded = util.find_buf(entry.path)
+    local lines  = {
+        "**" .. vim.fn.fnamemodify(entry.path, ":t") .. ":" .. entry.lnum .. "**",
+        "",
+        "- path: `" .. entry.path .. "`",
+        "- relative: `" .. entry.relpath .. "`",
+        "- line: `" .. entry.lnum .. "`",
+        "- buffer: " .. (loaded and ("`" .. loaded .. "` (loaded)") or "not loaded"),
+        "",
+        "```",
+        entry.text,
+        "```",
+    }
+    vim.lsp.util.open_floating_preview(lines, "markdown", {
+        border   = "rounded",
+        wrap     = false,
+        focus_id = "greplace.hover",
+    })
+end
+
 ---@param on_write fun(bufnr:integer)
 ---@return integer bufnr
 local function create_buf(on_write)
@@ -275,6 +309,12 @@ local function create_buf(on_write)
         vim.keymap.set("n", config.options.keys.open, function() jump(bufnr) end, {
             buffer = bufnr,
             desc   = "greplace: open the source of the line under the cursor",
+        })
+    end
+    if config.options.keys.hover and config.options.keys.hover ~= "" then
+        vim.keymap.set("n", config.options.keys.hover, function() hover(bufnr) end, {
+            buffer = bufnr,
+            desc   = "greplace: show the full details of the match under the cursor",
         })
     end
 
@@ -338,6 +378,10 @@ local function show(bufnr, height)
     vim.wo[0][0].winfixbuf      = true
 end
 
+--- Width of the `file:line` column: the widest location in the list, but never
+--- more than `path_width` -- one very deep path must not push every line of the
+--- panel halfway across the window. Anything longer than that is cropped on the
+--- left in `render`, so the column is exactly this wide.
 ---@param matches greplace.Match[]
 ---@return integer width
 local function location_width(matches)
@@ -345,7 +389,7 @@ local function location_width(matches)
     for _, m in ipairs(matches) do
         width = math.max(width, vim.fn.strdisplaywidth(m.relpath .. ":" .. m.lnum))
     end
-    return width
+    return math.min(width, math.max(config.options.path_width or width, 2))
 end
 
 --- Write the match list into the panel buffer and (re)anchor one extmark per
@@ -369,8 +413,13 @@ local function render(bufnr, matches)
     state.hidden  = {}
 
     for row, m in ipairs(matches) do
-        local location = string.format("%s:%d", m.relpath, m.lnum)
-        local pad      = string.rep(" ", width - vim.fn.strdisplaywidth(location))
+        -- Cropped on the left: the tail -- file name and line number -- is what
+        -- tells one match from another, while the leading directories are the
+        -- part they tend to share. `K` shows the whole path.
+        local location = strutil.crop_for_ui(
+            string.format("%s:%d", m.relpath, m.lnum), width, true)
+        local pad      = string.rep(" ",
+            math.max(0, width - vim.fn.strdisplaywidth(location)))
         local virt     = {
             { location, m.bufnr and "GreplaceBufferLocation" or "GreplaceLocation" },
             { pad .. " │ ",                                   "GreplaceSeparator" },

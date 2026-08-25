@@ -67,10 +67,15 @@ not from disk — their locations are marked with a distinct highlight.
 | Key | Effect |
 | --- | --- |
 | `<CR>` | open the source of the line under the cursor, at that line and column |
+| `K` | show the match under the cursor in a floating window: its full path, relative path, line number, whether it is already loaded in a buffer, and the source line as the panel rendered it |
 
 The file opens in a regular window — the panel keeps its own, and is never
-opened over. Set `keys.open` to a different key, or to `false`, to change or
-drop the mapping.
+opened over. Set `keys.open` or `keys.hover` to a different key, or to `false`,
+to change or drop either mapping.
+
+The `file:line` column is capped at `path_width` display cells; a longer
+location is cropped on the left, keeping the file name and line number visible.
+`K` is how you see the whole path.
 
 ### Editing rules
 
@@ -96,10 +101,13 @@ the applied text and corrected line numbers.
 
 ```lua
 require("greplace").setup({
-  height = 15,    -- height of the result split
-  limit  = 10000, -- maximum matches collected per search
+  height     = 15,    -- height of the result split
+  limit      = 10000, -- maximum matches collected per search
+  winbar     = true,  -- show the panel's counts in a winbar
+  path_width = 60,    -- greatest width of the `file:line` column, in cells
   keys = {
-    open = "<CR>", -- open the source of the line under the cursor
+    open  = "<CR>", -- open the source of the line under the cursor
+    hover = "K",    -- show the full details of the match under the cursor
   },
 })
 ```

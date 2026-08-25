@@ -11,13 +11,21 @@ local M = {}
 -- ---------------------------------------------------------------------------
 
 ---@class greplace.Keys
----@field open string  panel mapping that opens the source of the line under
----                    the cursor (empty or `false` to leave `<CR>` alone)
+---@field open  string  panel mapping that opens the source of the line under
+---                     the cursor (empty or `false` to leave `<CR>` alone)
+---@field hover string  panel mapping that shows the full details of the match
+---                     under the cursor in a floating window (empty or
+---                     `false` to leave `K` alone)
 
 ---@class greplace.Config
 ---@field height integer  height of the result split
 ---@field limit  integer  maximum matches collected per search
 ---@field winbar boolean  show the query and the panel's counts in a winbar
+---@field path_width integer  greatest display width the `file:line` column may
+---                           take in the panel; a longer location is cropped on
+---                           the left, so the file name and line number -- the
+---                           telling end of it -- stay visible. The full path is
+---                           always available through the `hover` mapping.
 ---@field keys   greplace.Keys
 
 ---@type greplace.Config
@@ -25,8 +33,10 @@ local _defaults = {
     height = 15,
     limit  = 10000,
     winbar = true,
+    path_width = 60,
     keys   = {
-        open = "<CR>",
+        open  = "<CR>",
+        hover = "K",
     },
 }
 
