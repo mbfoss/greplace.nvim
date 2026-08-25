@@ -18,6 +18,14 @@ local ui       = require("greplace.util.ui")
 local _NAME    = "greplace://replace"
 local _ns      = vim.api.nvim_create_namespace("greplace.anchor")
 local _ns_hl   = vim.api.nvim_create_namespace("greplace.match")
+local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
+
+-- The panel opens the moment a search is triggered, before there is anything
+-- to show, so the results land in a window that is already there rather than
+-- one that appears seconds later under the cursor. Until they do, the buffer
+-- holds a single blank line carrying the status as virtual text: that the
+-- search is running, and afterwards whatever came of it if it produced no list
+-- to render.
 
 ---@class greplace.Entry
 ---@field path    string   absolute file path
@@ -267,6 +275,7 @@ local function render(bufnr, matches)
     vim.bo[bufnr].modifiable = true
     vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 
     local width   = location_width(matches)
@@ -305,6 +314,60 @@ local function render(bufnr, matches)
     end
 
     vim.bo[bufnr].modified = false
+end
+
+--- Put a one-line status in the panel: the buffer holds a single blank,
+--- unmodifiable line, and the message rides on it as virtual text so it can
+--- never be mistaken for a result line to edit.
+---@param bufnr integer
+---@param chunks table[]  virtual text chunks, as `nvim_buf_set_extmark`
+local function set_status(bufnr, chunks)
+    if not vim.api.nvim_buf_is_valid(bufnr) then return end
+    vim.bo[bufnr].modifiable = true
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "" })
+    vim.api.nvim_buf_set_extmark(bufnr, _ns_st, 0, 0, {
+        virt_text     = chunks,
+        virt_text_pos = "inline",
+    })
+    vim.bo[bufnr].modified   = false
+    vim.bo[bufnr].modifiable = false
+end
+
+--- Replace the "searching" status with a final message -- "no matches", or
+--- the error that ended the search. The panel stays up: it was opened on the
+--- user's keystroke, and yanking it away again is more startling than leaving
+--- it saying what happened.
+---@param bufnr integer
+---@param msg   string
+---@param hl    string?
+function M.set_message(bufnr, msg, hl)
+    set_status(bufnr, { { msg, hl or "GreplaceSeparator" } })
+end
+
+--- Open the panel before there are any results, showing the query and that the
+--- search is running. `M.open` takes the same buffer over when it comes back.
+---@param opts { query:string, regex:boolean?, root:string, height:integer, on_write:fun(bufnr:integer) }
+---@return integer bufnr
+function M.open_loading(opts)
+    local bufnr   = M.find_buf() or create_buf(opts.on_write)
+    _state[bufnr] = {
+        query   = opts.query,
+        regex   = opts.regex or false,
+        root    = opts.root,
+        entries = {},
+        virt    = {},
+        hidden  = {},
+    }
+    show(bufnr, opts.height)
+    set_status(bufnr, {
+        { "searching for ", "GreplaceSeparator" },
+        { opts.query,       "GreplaceMatch" },
+        { " ...",           "GreplaceSeparator" },
+    })
+    return bufnr
 end
 
 --- Open (or reuse) the panel for a result set.

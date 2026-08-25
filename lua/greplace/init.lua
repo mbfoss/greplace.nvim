@@ -3,19 +3,19 @@ local M = {}
 -- ---------------------------------------------------------------------------
 -- greplace
 --
--- `:Greplace search <query>` greps the working tree and collects every
--- matching line into a `greplace://replace` split. The lines are plain,
--- editable text (the `file:line` prefix is virtual), and writing the buffer
--- pushes each edited line back to its source — in buffers, never to disk.
+-- `:Gsearch <query>` greps the working tree and collects every matching line
+-- into a `greplace://replace` split. The lines are plain, editable text (the
+-- `file:line` prefix is virtual), and writing the buffer pushes each edited
+-- line back to its source — in buffers, never to disk.
 --
---   Greplace search[!] <query>   grep for <query> (`!` treats it as a regex)
---   Greplace refresh             re-run the last query, discarding unapplied
---                                edits
+--   Gsearch[!] <query>   grep for <query> (`!` treats it as a regex)
+--   Gsearch              with no query: re-run the last one, discarding
+--                        unapplied edits
 --
--- This module owns argument parsing and completion, as `M.run` and
--- `M.complete`, plus the API the command is a thin skin over (`M.open`,
--- `M.refresh`); the command itself is registered in `plugin/greplace.lua`, and
--- the work lives in `greplace.search` / `greplace.panel` / `greplace.apply`.
+-- This module owns the command body, as `M.run`, plus the API it is a thin
+-- skin over (`M.open`, `M.refresh`); the command itself is registered in
+-- `plugin/greplace.lua`, and the work lives in `greplace.search` /
+-- `greplace.panel` / `greplace.apply`.
 -- ---------------------------------------------------------------------------
 
 local config = require("greplace.config")
@@ -58,25 +58,36 @@ end
 function M.open(query, opts)
     opts = opts or {}
     local root = search.resolve_root(opts.cwd)
+    -- The panel goes up before the search does, so the results appear in a
+    -- window that is already open and settled rather than one that springs up
+    -- under the cursor whenever rg happens to finish. Until then it says it
+    -- is searching.
+    local args = {
+        query    = query,
+        regex    = opts.regex,
+        root     = root,
+        height   = config.options.height,
+        on_write = on_write,
+    }
+    local bufnr = panel.open_loading(args)
 
     search.run(query, { cwd = root, regex = opts.regex, limit = config.options.limit },
         function(matches, err)
             vim.schedule(function()
+                -- The panel can have been closed while the search ran.
+                local live = vim.api.nvim_buf_is_valid(bufnr) and panel.is_panel(bufnr)
                 if err then
+                    if live then panel.set_message(bufnr, err, "ErrorMsg") end
                     _notify(err, vim.log.levels.ERROR)
                     return
                 end
                 if not matches or #matches == 0 then
+                    if live then panel.set_message(bufnr, "no matches for " .. query) end
                     _notify("no matches for " .. query, vim.log.levels.WARN)
                     return
                 end
-                panel.open(matches, {
-                    query    = query,
-                    regex    = opts.regex,
-                    root     = root,
-                    height   = config.options.height,
-                    on_write = on_write,
-                })
+                if not live then return end
+                panel.open(matches, args)
             end)
         end)
 end
@@ -92,50 +103,23 @@ function M.refresh()
     M.open(state.query, { regex = state.regex, cwd = state.root })
 end
 
---- Everything after the subcommand, taken from the raw command line rather
---- than from the split arguments: a grep query is one string, and its spaces,
---- quotes and backslashes all belong to it.
----@param raw string  `opts.args`, the command line after `:Greplace`
----@return string
-local function _tail(raw)
-    return vim.trim(raw:gsub("^%s*%S+", "", 1))
-end
-
---- `:Greplace`'s implementation, as a `greplace.usercmd.run_fn`. Exposed so
---- that `plugin/greplace.lua` can register the command without this module
+--- `:Gsearch`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
+--- so that `plugin/greplace.lua` can register the command without this module
 --- being loaded: it hands `util/usercmd` a wrapper that requires us on the
 --- first invocation.
----@type greplace.usercmd.run_fn
-function M.run(_, args, opts)
-    local sub = args[1]
-    if sub == "search" then
-        local query = _tail(opts.args)
-        if query == "" then
-            _notify("Greplace search takes a query", vim.log.levels.ERROR)
-            return
-        end
-        M.open(query, { regex = opts.bang })
-    elseif sub == "refresh" then
-        if args[2] then
-            _notify("Greplace refresh takes no arguments", vim.log.levels.ERROR)
-            return
-        end
+---
+--- The query is the command line verbatim rather than a parsed argument list:
+--- a grep query is one string, and its spaces, quotes and backslashes all
+--- belong to it. With no query at all, re-run the last one.
+---@param _cmd string
+---@param opts vim.api.keyset.create_user_command.command_args
+function M.run(_cmd, opts)
+    local query = vim.trim(opts.args)
+    if query == "" then
         M.refresh()
-    elseif sub == nil then
-        vim.api.nvim_echo({ { "Argument required", "Error" } }, false, {})
     else
-        _notify("unknown subcommand: " .. sub, vim.log.levels.ERROR)
+        M.open(query, { regex = opts.bang })
     end
-end
-
---- `:Greplace`'s completion, as a `greplace.usercmd.subcommand_fn`. Exposed
---- for the same reason as `M.run`.
----@type greplace.usercmd.subcommand_fn
-function M.complete(_, rest, _)
-    if #rest == 0 then return { "search", "refresh" } end
-    -- Neither subcommand takes anything completable: `search`'s tail is a
-    -- free-text query, and `refresh` takes nothing at all.
-    return {}
 end
 
 ---@param opts greplace.Config?

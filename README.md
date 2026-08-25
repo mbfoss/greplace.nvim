@@ -5,7 +5,7 @@
 Project-wide search and replace by editing the grep results.
 
 ```
-:Greplace search <query>
+:Gsearch <query>
 ```
 
 greps the working tree and collects every matching line into a split named
@@ -42,19 +42,22 @@ from being undone.
 }
 ```
 
-`setup()` is optional; the `:Greplace` command registers itself, and nothing
-under `lua/greplace/` is loaded until it is first run or completed.
+`setup()` is optional; the `:Gsearch` command registers itself, and nothing
+under `lua/greplace/` is loaded until it is first run.
 
 ## Usage
 
 | Command | Effect |
 | --- | --- |
-| `:Greplace search foo bar` | literal search for `foo bar` (smart-case) |
-| `:Greplace! search ^fn\s+\w+` | the query is a regex |
-| `:Greplace refresh` | re-run the last query, discarding unapplied edits |
+| `:Gsearch foo bar` | literal search for `foo bar` (smart-case) |
+| `:Gsearch! ^fn\s+\w+` | the query is a regex |
+| `:Gsearch` | with no query: re-run the last one, discarding unapplied edits |
 
-Everything after `search` is the query, verbatim — spaces, quotes and
-backslashes included. `<Tab>` completes the subcommands.
+Everything after `:Gsearch` is the query, verbatim — spaces, quotes and
+backslashes included.
+
+The panel opens as soon as the search is triggered and says that it is
+searching until the results replace it.
 
 Files that are open in a buffer are searched from their current, unsaved text,
 not from disk — their locations are marked with a distinct highlight.

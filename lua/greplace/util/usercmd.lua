@@ -6,8 +6,8 @@ local unpack = table.unpack or unpack
 --- Split a command line into arguments on unescaped whitespace, honouring
 --- backslash escapes and shell-style quoting, so that an argument containing
 --- spaces can be given as one (`\ ` or `"..."`) rather than splitting into
---- two. Note that `:Greplace search` does not use this: its query is taken
---- from the raw command line, spaces, quotes and backslashes included.
+--- two. Note that `:Gsearch` does not use this: its query is taken from the
+--- raw command line, spaces, quotes and backslashes included.
 ---@param str string
 ---@return string[]
 local function _split_args(str)
