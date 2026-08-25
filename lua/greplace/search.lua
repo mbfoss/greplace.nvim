@@ -205,10 +205,15 @@ local function rg_json(cmd, root, stdin, sink, done)
 end
 
 --- Run both searches and hand the merged, path/line-sorted matches back.
+---
+--- Returns a `cancel` that kills both rg processes and suppresses `callback`:
+--- a cancelled search reports nothing at all, so a caller that starts a new
+--- search over the same panel can never be overwritten by the old one landing
+--- late. Cancelling after the callback has already fired is a no-op.
 ---@param query    string
 ---@param opts     greplace.SearchOpts
 ---@param callback fun(matches:greplace.Match[]?, err:string?)
----@return fun()? cancel  aborts both rg processes
+---@return fun()? cancel  aborts both rg processes; nil if none were started
 function M.run(query, opts, callback)
     if query == "" then
         callback(nil, "empty search query")
@@ -224,13 +229,16 @@ function M.run(query, opts, callback)
     local open  = {} ---@type table<string, greplace.OpenBuf>
     for _, b in ipairs(bufs) do open[b.path] = b end
 
-    local matches = {} ---@type greplace.Match[]
-    local pending = 2
-    local errs    = {}
+    local matches   = {} ---@type greplace.Match[]
+    local pending   = 2
+    local errs      = {}
+    local cancelled = false
+    local finished  = false
 
     local function done()
         pending = pending - 1
-        if pending > 0 then return end
+        if pending > 0 or cancelled or finished then return end
+        finished = true
         if #matches == 0 and #errs > 0 then
             callback(nil, table.concat(errs, "; "))
             return
@@ -248,6 +256,7 @@ function M.run(query, opts, callback)
     local handles = {} ---@type keystone.util.SpawnHandle[]
 
     local function on_pass_done(err)
+        if cancelled then return end
         if err then errs[#errs + 1] = err end
         done()
     end
@@ -256,7 +265,7 @@ function M.run(query, opts, callback)
     local dir_cmd = rg_base(opts)
     vim.list_extend(dir_cmd, { "--sort", "path", "--", query, "." })
     handles[#handles + 1] = rg_json(dir_cmd, root, nil, function(m)
-        if not open[m.path] then matches[#matches + 1] = m end
+        if not cancelled and not open[m.path] then matches[#matches + 1] = m end
     end, on_pass_done)
 
     -- Open-buffer pass: one process fed every buffer's current text.
@@ -272,6 +281,7 @@ function M.run(query, opts, callback)
         local buf_cmd = rg_base(opts)
         vim.list_extend(buf_cmd, { "--", query, "-" })
         handles[#handles + 1] = rg_json(buf_cmd, root, table.concat(chunks, "\n"), function(m)
+            if cancelled then return end
             local b, lnum = locate(bufs, starts, m.lnum)
             if b and lnum then
                 m.path    = b.path
@@ -283,9 +293,12 @@ function M.run(query, opts, callback)
         end, on_pass_done)
     end
 
-    --- Abort both passes. `callback` still fires, with whatever was collected.
+    --- Abort both passes without reporting anything.
     return function()
+        if cancelled or finished then return end
+        cancelled = true
         for _, h in ipairs(handles) do h.kill() end
+        handles = {}
     end
 
 end

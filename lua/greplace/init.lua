@@ -22,6 +22,23 @@ local config = require("greplace.config")
 local panel  = require("greplace.panel")
 local search = require("greplace.search")
 
+--- The search currently in flight, if any. Only one runs at a time: they all
+--- render into the same panel buffer, so a second search starting means the
+--- first one's results are already obsolete. Starting one cancels it, and so
+--- does wiping the panel out from under it -- both leave no callback to land
+--- late over the newer state.
+---@type fun()?
+local _cancel = nil
+
+--- Cancel the in-flight search, if there is one.
+local function abort()
+    if _cancel then
+        local cancel = _cancel
+        _cancel = nil
+        cancel()
+    end
+end
+
 ---@param msg string
 ---@param level integer?
 local function _notify(msg, level)
@@ -69,10 +86,24 @@ function M.open(query, opts)
         height   = config.options.height,
         on_write = on_write,
     }
+    -- Whatever was still running was searching for the previous query into
+    -- this same buffer; drop it before the panel is retitled.
+    abort()
     local bufnr = panel.open_loading(args)
 
-    search.run(query, { cwd = root, regex = opts.regex, limit = config.options.limit },
+    -- Wiping the panel ends the search that was filling it. The augroup is
+    -- cleared per search, so the buffer never accumulates one autocommand per
+    -- `:Gsearch` (it is reused across them).
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        group    = vim.api.nvim_create_augroup("greplace.search", { clear = true }),
+        buffer   = bufnr,
+        desc     = "greplace: cancel the search filling the panel",
+        callback = abort,
+    })
+
+    _cancel = search.run(query, { cwd = root, regex = opts.regex, limit = config.options.limit },
         function(matches, err)
+            _cancel = nil
             vim.schedule(function()
                 -- The panel can have been closed while the search ran.
                 local live = vim.api.nvim_buf_is_valid(bufnr) and panel.is_panel(bufnr)

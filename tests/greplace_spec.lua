@@ -1,6 +1,7 @@
 local apply   = require("greplace.apply")
 local panel   = require("greplace.panel")
 local search  = require("greplace.search")
+local greplace = require("greplace")
 
 local _root
 
@@ -273,5 +274,44 @@ describe("greplace", function()
             query = "hit", root = _root, height = 10, on_write = function() end,
         })
         assert.equals(first, second)
+    end)
+
+    it("reports nothing once the search has been cancelled", function()
+        write_file("a.txt", { "hit one" })
+        local fired = false
+        local cancel = search.run("hit", { cwd = _root }, function() fired = true end)
+        assert.is_function(cancel)
+        cancel()
+        -- Long enough for both rg processes to have exited and drained.
+        vim.wait(500, function() return fired end, 20)
+        assert.is_false(fired)
+        -- Cancelling twice, and after the fact, is a no-op.
+        cancel()
+    end)
+
+    it("leaves the panel showing the newest query when searches overlap", function()
+        write_file("a.txt", { "alpha here" })
+        write_file("b.txt", { "bravo here" })
+
+        greplace.open("alpha")
+        greplace.open("bravo")
+
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)[1] ~= ""
+        end, 20))
+
+        assert.same({ "bravo here" }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+        assert.equals("bravo", panel.state(bufnr).query)
+    end)
+
+    it("cancels the running search when the panel is wiped out", function()
+        write_file("a.txt", { "hit one" })
+        greplace.open("hit")
+        local bufnr = assert(panel.find_buf())
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+        vim.wait(500, function() return false end, 20)
+        -- The search dropped its results rather than resurrecting the panel.
+        assert.is_nil(panel.find_buf())
     end)
 end)
