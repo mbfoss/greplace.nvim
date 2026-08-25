@@ -1,6 +1,7 @@
 local M = {}
 
-local util = require("greplace.util")
+local util  = require("greplace.util")
+local spawn = require("greplace.util.spawn")
 
 -- ---------------------------------------------------------------------------
 -- Search backend: one `rg --json` pass over the working tree, plus a second one
@@ -153,20 +154,61 @@ local function locate(bufs, starts, lnum)
     return b, rel
 end
 
----@param out    string
----@param root   string
----@param sink   fun(m:greplace.Match)
-local function each_match(out, root, sink)
-    for line in vim.gsplit(out or "", "\n", { trimempty = true }) do
-        local m = parse_match(line, root)
-        if m then sink(m) end
+--- Run one `rg --json` pass, feeding matches to `sink` as they are parsed.
+--- rg's JSON output is one object per line, but pipe reads split anywhere, so
+--- the trailing partial line is carried over to the next chunk.
+---@param cmd   string[]
+---@param root  string
+---@param stdin string?  text to feed rg's `-` target, if any
+---@param sink  fun(m:greplace.Match)
+---@param done  fun(err:string?)
+---@return keystone.util.SpawnHandle?
+local function rg_json(cmd, root, stdin, sink, done)
+    local rest, errbuf = "", {}
+
+    local function feed(chunk, last)
+        rest = rest .. chunk
+        local from = 1
+        while true do
+            local nl = rest:find("\n", from, true)
+            if not nl then break end
+            local m = parse_match(rest:sub(from, nl - 1), root)
+            if m then sink(m) end
+            from = nl + 1
+        end
+        rest = rest:sub(from)
+        if last and rest ~= "" then
+            local m = parse_match(rest, root)
+            if m then sink(m) end
+            rest = ""
+        end
     end
+
+    local handle = spawn(cmd, {
+        cwd    = root,
+        stdin  = stdin ~= nil,
+        stdout = function(data) feed(data, false) end,
+        stderr = function(data) errbuf[#errbuf + 1] = data end,
+    }, function(code)
+        feed("", true)
+        -- rg exits 1 when nothing matched, which is not an error here.
+        if code > 1 then
+            local msg = vim.trim(table.concat(errbuf))
+            done(msg ~= "" and msg or "rg failed")
+        else
+            done(nil)
+        end
+    end)
+
+    if handle and stdin then handle.write(stdin, function() handle.write(nil) end) end
+    return handle
 end
 
 --- Run both searches and hand the merged, path/line-sorted matches back.
 ---@param query    string
 ---@param opts     greplace.SearchOpts
 ---@param callback fun(matches:greplace.Match[]?, err:string?)
+---@return fun()? cancel  aborts both rg processes
 function M.run(query, opts, callback)
     if query == "" then
         callback(nil, "empty search query")
@@ -203,43 +245,33 @@ function M.run(query, opts, callback)
         callback(matches)
     end
 
+    local handles = {} ---@type keystone.util.SpawnHandle[]
+
+    local function on_pass_done(err)
+        if err then errs[#errs + 1] = err end
+        done()
+    end
+
     -- Disk pass.
     local dir_cmd = rg_base(opts)
     vim.list_extend(dir_cmd, { "--sort", "path", "--", query, "." })
-    vim.system(dir_cmd, { cwd = root, text = true }, function(res)
-        -- rg exits 1 when nothing matched, which is not an error here.
-        if res.code > 1 then
-            errs[#errs + 1] = vim.trim(res.stderr or "rg failed")
-        end
-        each_match(res.stdout, root, function(m)
-            if not open[m.path] then matches[#matches + 1] = m end
-        end)
-        vim.schedule(done)
-    end)
+    handles[#handles + 1] = rg_json(dir_cmd, root, nil, function(m)
+        if not open[m.path] then matches[#matches + 1] = m end
+    end, on_pass_done)
 
     -- Open-buffer pass: one process fed every buffer's current text.
     if #bufs == 0 then
         vim.schedule(done)
-        return
-    end
-
-    local starts = line_offsets(bufs)
-    local chunks = {}
-    for _, b in ipairs(bufs) do
-        chunks[#chunks + 1] = table.concat(b.lines, "\n")
-    end
-
-    local buf_cmd = rg_base(opts)
-    vim.list_extend(buf_cmd, { "--", query, "-" })
-    vim.system(buf_cmd, {
-        cwd   = root,
-        text  = true,
-        stdin = table.concat(chunks, "\n"),
-    }, function(res)
-        if res.code > 1 then
-            errs[#errs + 1] = vim.trim(res.stderr or "rg failed")
+    else
+        local starts = line_offsets(bufs)
+        local chunks = {}
+        for _, b in ipairs(bufs) do
+            chunks[#chunks + 1] = table.concat(b.lines, "\n")
         end
-        each_match(res.stdout, root, function(m)
+
+        local buf_cmd = rg_base(opts)
+        vim.list_extend(buf_cmd, { "--", query, "-" })
+        handles[#handles + 1] = rg_json(buf_cmd, root, table.concat(chunks, "\n"), function(m)
             local b, lnum = locate(bufs, starts, m.lnum)
             if b and lnum then
                 m.path    = b.path
@@ -248,9 +280,14 @@ function M.run(query, opts, callback)
                 m.bufnr   = b.bufnr
                 matches[#matches + 1] = m
             end
-        end)
-        vim.schedule(done)
-    end)
+        end, on_pass_done)
+    end
+
+    --- Abort both passes. `callback` still fires, with whatever was collected.
+    return function()
+        for _, h in ipairs(handles) do h.kill() end
+    end
+
 end
 
 return M
