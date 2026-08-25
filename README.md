@@ -96,8 +96,8 @@ the applied text and corrected line numbers.
 
 ```lua
 require("greplace").setup({
-  height = 15,   -- height of the result split
-  limit  = 2000, -- maximum matches collected per search
+  height = 15,    -- height of the result split
+  limit  = 10000, -- maximum matches collected per search
   keys = {
     open = "<CR>", -- open the source of the line under the cursor
   },

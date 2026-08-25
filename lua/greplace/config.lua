@@ -23,7 +23,7 @@ local M = {}
 ---@type greplace.Config
 local _defaults = {
     height = 15,
-    limit  = 2000,
+    limit  = 10000,
     winbar = true,
     keys   = {
         open = "<CR>",

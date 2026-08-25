@@ -240,9 +240,11 @@ function M.run(query, opts, callback)
     local handles = {} ---@type keystone.util.SpawnHandle[]
 
     --- Collect one match, and stop both rg processes once `limit` of them have
-    --- arrived. Without this the limit was only a slice applied at the end, so
-    --- a query with millions of hits in a large tree decoded and retained every
-    --- one of them before showing 2000 -- which is what made big projects hang.
+    --- arrived. Every sink checks `truncated` before calling in, so the list
+    --- never grows past `limit` and needs no trimming afterwards. Without this
+    --- the limit was only a slice applied at the end, so a query with millions
+    --- of hits in a large tree decoded and retained every one of them before
+    --- showing `limit` -- which is what made big projects hang.
     ---@param m greplace.Match
     local function add(m)
         matches[#matches + 1] = m
@@ -264,9 +266,6 @@ function M.run(query, opts, callback)
             if a.relpath ~= b.relpath then return a.relpath < b.relpath end
             return a.lnum < b.lnum
         end)
-        if limit and #matches > limit then
-            matches = vim.list_slice(matches, 1, limit)
-        end
         callback(matches)
     end
 
