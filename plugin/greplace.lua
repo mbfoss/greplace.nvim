@@ -19,9 +19,10 @@ vim.api.nvim_create_user_command("Gsearch", function(opts)
         return greplace.run(cmd, cmd_opts)
     end)
 end, {
+    desc     = "Grep the working tree into an editable buffer (! for regex)",
     -- `nargs = "*"` rather than `"?"`: a query is one string that may well
     -- contain spaces, and it is read whole off `opts.args`.
-    nargs = "*",
-    bang  = true,
-    desc  = "Grep the working tree into an editable buffer (! for regex)",
+    nargs    = "*",
+    bang     = true,
+    complete = function() return {} end,
 })
