@@ -8,7 +8,7 @@ local M = {}
 -- concatenated text of open buffers fed to `rg -` -- and a file-selection flag
 -- only reaches the first of those: rg sees the buffer pass as one nameless
 -- stream, so `-g` and `--type` have nothing to filter there. Left at that, a
--- `--filter '*.lua'` search would skip `.md` files on disk and then report
+-- `--filter *.lua` search would skip `.md` files on disk and then report
 -- matches from the `.md` you happen to have open. So the same globs are
 -- compiled here and applied to the buffer list before the stream is built, and
 -- rg's own file types are read once (`rg --type-list`) so `--type lua` can be
@@ -77,7 +77,7 @@ end
 ---@type greplace.rgflags.FlagDef[]
 M.FLAGS = {
     { name = "dir",       arg = "path", complete = "dir", desc = "search root directory" },
-    { name = "filter",    arg = "glob", multi = true, desc = "glob filter, repeatable: '*.txt', '!*.lua', '**/dir/**'" },
+    { name = "filter",    arg = "glob", multi = true, desc = "glob filter, repeatable: *.txt, !*.lua, **/dir/**" },
     { name = "type",      arg = "name", multi = true, complete = complete_type, desc = "rg file type, repeatable: lua, rust, !md (rg --type-list)" },
     { name = "max-depth", arg = "n", desc = "max directory depth to descend" },
     { name = "regex",     desc = "treat the query as a regex" },
@@ -235,37 +235,43 @@ function M.buffer_filter(flags)
     end
 end
 
---- Split a `:GreplaceEx` command line into its flags and its query, at the
---- first bare `--`. Everything past that is the query, verbatim: a grep query's
---- spaces, quotes, backslashes and leading dashes are all its own, and a query
---- may well contain another `--`. Without the separator there is no query,
---- which is an error rather than a guess at where the flags stopped.
+--- Read a `:GreplaceEx` command line: the flags Neovim has already split for
+--- us, up to the first bare `--`, and the query as the raw line spells it from
+--- there on. A grep query's spaces, quotes, backslashes and leading dashes are
+--- all its own, so it is never taken from the split -- only the flags are, and
+--- they are written the way `:h <f-args>` says: `--switch`, `--key value` or
+--- `--key=value`, with `\ ` for a space inside a value.
 ---
---- Flags are written the way a shell writes them -- `--switch`, `--key value`,
---- `--key=value` -- and their values are split shell-style, so a value with a
---- space in it is quoted or escaped like anywhere else.
----@param raw string  the command line's arguments, verbatim
+--- Without the separator there is no query, which is an error rather than a
+--- guess at where the flags stopped.
+---@param fargs string[]  the whole argument line, as Neovim split it
+---@param raw   string    the same line, verbatim
 ---@return { flags:table, query:string }? parsed
 ---@return string? err
-function M.parse(raw)
-    local head, query = "", raw:match("^%-%-%s+(.*)$")
-    if not query then
-        -- Non-greedy, so the first bare `--` wins. `--foo` is not one: the
-        -- pattern wants whitespace on both sides of it.
-        head, query = raw:match("^(.-)%s+%-%-%s+(.*)$")
+function M.parse(fargs, raw)
+    local sep
+    for i, arg in ipairs(fargs) do
+        if arg == "--" then
+            sep = i
+            break
+        end
     end
-    if not head then
+    if not sep then
         return nil, "no query: write the flags, then `--`, then the query"
     end
-    if vim.trim(query) == "" then
+
+    -- The query is what follows the separator in the raw line, not the
+    -- rejoined tokens: rejoining them would eat the very spacing and escapes
+    -- the query is entitled to keep.
+    local query = raw:match("^%-%-%s+(.*)$") or raw:match("^.-%s+%-%-%s+(.*)$")
+    if not query or vim.trim(query) == "" then
         return nil, "empty search query"
     end
 
-    local flags  = {}
-    local tokens = strutil.split_shell_args(head)
-    local i      = 1
-    while i <= #tokens do
-        local token = tokens[i]
+    local flags = {}
+    local i     = 1
+    while i < sep do
+        local token = fargs[i]
         local name, glued = token:match("^%-%-([%w][%w%-]*)=(.*)$")
         if not name then name = token:match("^%-%-([%w][%w%-]*)$") end
         if not name then
@@ -287,9 +293,9 @@ function M.parse(raw)
             if not value then
                 -- `--key value`: the next word is the value, whatever it looks
                 -- like. A glob or a negated type starts with a character a flag
-                -- could start with too, so only running out of words is an
-                -- error here.
-                i, value = i + 1, tokens[i + 1]
+                -- could start with too, so only running out of words -- the
+                -- separator counts as running out -- is an error here.
+                i, value = i + 1, i + 1 < sep and fargs[i + 1] or nil
                 if not value then
                     return nil, ("--%s needs a %s"):format(name, def.arg)
                 end
@@ -306,18 +312,6 @@ function M.parse(raw)
     end
 
     return { flags = flags, query = query }
-end
-
---- The flag section of what is written behind the cursor: everything after the
---- command's own name and before a bare `--`, past which the words are a query
---- rather than a list to complete from.
----@param written string  the command line up to the cursor
----@return string? args   nil once the cursor is past the separator
-local function flag_section(written)
-    local args = written:match("^%s*%S+%s(.*)$")
-    if not args then return nil end
-    if args:match("^%-%-%s") or args:find("%s%-%-%s") then return nil end
-    return args
 end
 
 ---@param def     greplace.rgflags.FlagDef
@@ -361,17 +355,17 @@ end
 --- told apart by what is behind it: after `--key`, where a value is next;
 --- inside a `--key=`, where the value is glued on and the candidate has to
 --- carry the `--key=` back with it; and anywhere else, where a flag name is
---- what can be written.
+--- what can be written. Past the separator there is nothing to complete: those
+--- words are a query, not a list.
 ---@param arglead  string
 ---@param cmdline  string
 ---@param cursor   integer  byte offset of the cursor: how much of `cmdline` is
 ---                         behind it, which is what `customlist` is handed
 ---@return string[]
 function M.complete(arglead, cmdline, cursor)
-    local written = cmdline:sub(1, cursor)
-    if not flag_section(written) then return {} end
+    return usercmd.complete(arglead, cmdline:sub(1, cursor), function(_, rest, lead)
+        if vim.tbl_contains(rest, "--") then return {} end
 
-    return usercmd.complete(arglead, written, function(_, rest, lead)
         -- A value glued to its flag, `--type=lu`.
         local name, partial = lead:match("^%-%-([%w][%w%-]*)=(.*)$")
         if name then

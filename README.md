@@ -63,15 +63,16 @@ below.
 up. Flags come first, then a bare `--`, then the query:
 
 ```
-:GreplaceEx --filter '*.lua' --filter '!*_spec.lua' --hidden -- handle_event
+:GreplaceEx --filter *.lua --filter !*_spec.lua --hidden -- handle_event
 :GreplaceEx --type md --dir docs -- TODO
 :GreplaceEx --regex --word -- ^fn\s+\w+
 ```
 
-Flags are written as a shell writes them: `--switch`, `--key value` or
-`--key=value`, with values split shell-style so one containing a space is
-quoted or escaped (`--dir 'my src'`). A repeatable flag is repeated rather than
-given a list.
+Flags are written `--switch`, `--key value` or `--key=value`, and are split by
+Vim's own rules (`:h <f-args>`): unescaped whitespace separates them, and a
+backslash escapes the character after it, so a value containing a space is
+written `--dir my\ src`. Quotes are not special. A repeatable flag is repeated
+rather than given a list.
 
 The `--` is what keeps the query verbatim: nothing after the first bare one is
 parsed, so a query may hold spaces, quotes, leading dashes and another `--`. A
@@ -88,7 +89,7 @@ the `--` nothing completes at all — those words are a query, not a list.
 | Flag | Effect |
 | --- | --- |
 | `--dir <path>` | search root (default: the working directory) |
-| `--filter <glob>` | glob filter, repeatable: `'*.txt'`, `'!*.lua'`, `'**/dir/**'` |
+| `--filter <glob>` | glob filter, repeatable: `*.txt`, `!*.lua`, `**/dir/**` |
 | `--type <name>` | rg file type, repeatable: `lua`, `rust`, `!md` (see `rg --type-list`) |
 | `--max-depth <n>` | maximum directory depth to descend |
 | `--regex` | treat the query as a regex |
@@ -105,7 +106,7 @@ contract is that a shown line is the source line byte for byte, and `--replace`,
 
 File-selection flags are also applied to open buffers, in-process — ripgrep sees
 the buffer pass as one nameless stdin stream, so its own `-g` and `-t` cannot
-reach it, and without that a `--filter '*.lua'` search would quietly report
+reach it, and without that a `--filter *.lua` search would quietly report
 matches from a `.md` you have open.
 
 The panel opens as soon as the search is triggered and says that it is

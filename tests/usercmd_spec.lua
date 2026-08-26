@@ -38,18 +38,11 @@ local function panel_lines(bufnr)
 end
 
 describe("greplace.util.usercmd", function()
-    it("splits arguments on unescaped whitespace", function()
+    it("hands Neovim's own split of the arguments to the body", function()
         local seen
-        usercmd.handle({ name = "Greplace", args = [[search one two]] },
+        usercmd.handle({ name = "Greplace", fargs = { "search", "one", "two" } },
             function(_, args) seen = args end)
         assert.are.same({ "search", "one", "two" }, seen)
-    end)
-
-    it("keeps quoted and escaped whitespace inside one argument", function()
-        local seen
-        usercmd.handle({ name = "Greplace", args = [["one two" three\ four]] },
-            function(_, args) seen = args end)
-        assert.are.same({ "one two", "three four" }, seen)
     end)
 
     it("reports an error from the command body as a notification", function()
@@ -160,7 +153,7 @@ describe(":Greplace", function()
         write_file("b.md", { "hit md" })
         write_file(".hidden/c.lua", { "hit hidden" })
 
-        local bufnr = assert(run("GreplaceEx --filter '*.lua' --hidden -- hit"))
+        local bufnr = assert(run("GreplaceEx --filter *.lua --hidden -- hit"))
         assert.are.same({ "hit hidden", "hit lua" }, panel_lines(bufnr))
 
         assert.are.same({ "hit md" },
@@ -168,7 +161,7 @@ describe(":Greplace", function()
         -- An excluding glob, and the `.gitignore`-blind default: without
         -- `hidden` the dotfile is out again.
         assert.are.same({ "hit lua" },
-            panel_lines(assert(run("GreplaceEx --filter '*.lua' --filter '!b.*' -- hit"))))
+            panel_lines(assert(run("GreplaceEx --filter *.lua --filter !b.* -- hit"))))
     end)
 
     it("filters open buffers the same way, which rg cannot do itself", function()
@@ -181,7 +174,7 @@ describe(":Greplace", function()
         vim.api.nvim_buf_set_lines(mdbuf, 0, -1, false, { "hit md, unsaved" })
 
         assert.are.same({ "hit lua" },
-            panel_lines(assert(run("GreplaceEx --filter '*.lua' -- hit"))))
+            panel_lines(assert(run("GreplaceEx --filter *.lua -- hit"))))
         -- Unfiltered, that same unsaved line is found.
         assert.are.same({ "hit lua", "hit md, unsaved" },
             panel_lines(assert(run("GreplaceEx -- hit"))))
@@ -243,7 +236,10 @@ describe(":Greplace", function()
         ---@param raw string
         ---@return string
         local function err(raw)
-            local parsed, e = rgflags.parse(raw)
+            -- Split the way Neovim splits it before a command body ever sees
+            -- it, so what is tested is what `:GreplaceEx` would parse.
+            local fargs = vim.split(raw, "%s+", { trimempty = true })
+            local parsed, e = rgflags.parse(fargs, raw)
             assert.is_nil(parsed)
             return assert(e)
         end
@@ -252,12 +248,12 @@ describe(":Greplace", function()
         assert.is_truthy(err("--bogus -- hit"):match("unknown flag: %-%-bogus"))
         assert.is_truthy(err("--regex=1 -- hit"):match("takes no value"))
         assert.is_truthy(err("--filter -- hit"):match("needs a glob"))
-        assert.is_truthy(err("filter '*.lua' -- hit"):match("not a flag"))
+        assert.is_truthy(err("filter *.lua -- hit"):match("not a flag"))
     end)
 
-    it("takes a flag value shell-style, quotes and all", function()
+    it("takes a flag value with an escaped space, as `:h <f-args>` has it", function()
         write_file("my src/a.txt", { "hit here" })
-        local bufnr = assert(run("GreplaceEx --dir 'my src' -- hit"))
+        local bufnr = assert(run([[GreplaceEx --dir my\ src -- hit]]))
         assert.are.same({ "hit here" }, panel_lines(bufnr))
     end)
 

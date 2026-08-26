@@ -12,7 +12,7 @@ local M = {}
 --   Greplace                  with no query: re-run the last one, discarding
 --                             unapplied edits
 --   GreplaceEx <flags> -- <q> the same search with `greplace.rgflags`'s flags
---                             (`--filter '*.lua' --hidden -- <q>`): a narrowed
+--                             (`--filter *.lua --hidden -- <q>`): a narrowed
 --                             file set, a regex, a case rule
 --
 -- This module owns both command bodies, as `M.run` and `M.run_ex`, plus the
@@ -166,16 +166,16 @@ end
 --- `--`, then the query verbatim. Same search and same panel as
 --- `:Greplace`; only the file set and the match rules are opened up.
 ---@param _cmd string
+---@param fargs string[]  the argument line, as Neovim split it
 ---@param opts vim.api.keyset.create_user_command.command_args
-function M.run_ex(_cmd, opts)
-    local raw = vim.trim(opts.args)
-    if raw == "" then
+function M.run_ex(_cmd, fargs, opts)
+    if #fargs == 0 then
         M.refresh()
         return
     end
 
     local rgflags = require("greplace.rgflags")
-    local parsed, err = rgflags.parse(raw)
+    local parsed, err = rgflags.parse(fargs, vim.trim(opts.args))
     if not parsed then
         _notify(assert(err), vim.log.levels.ERROR)
         return
