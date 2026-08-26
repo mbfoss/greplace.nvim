@@ -9,14 +9,13 @@ local M = {}
 -- line back to its source — in buffers, never to disk.
 --
 --   Greplace <query>          grep for <query>, literally
---   Greplace                  with no query: re-run the last one, discarding
---                             unapplied edits
+--   Greplace                  with no query: cancel the search in flight
 --   GreplaceEx <flags> -- <q> the same search with `greplace.rgflags`'s flags
 --                             (`--filter *.lua --hidden -- <q>`): a narrowed
 --                             file set, a regex, a case rule
 --
 -- This module owns both command bodies, as `M.run` and `M.run_ex`, plus the
--- API they are a thin skin over (`M.open`, `M.refresh`); the commands
+-- API they are a thin skin over (`M.open`, `M.cancel`, `M.refresh`); the commands
 -- themselves are registered in `plugin/greplace.lua`, and the work lives in
 -- `greplace.rgflags` / `greplace.search` /
 -- `greplace.panel` / `greplace.apply`.
@@ -132,7 +131,26 @@ function M.open(query, opts)
         end)
 end
 
+--- Stop the search in flight, leaving the panel showing that it was stopped
+--- rather than the query it will never finish. Nothing is re-run: a search
+--- that is taking too long is stopped so that a narrower one can be typed.
+function M.cancel()
+    if not _cancel then
+        _notify("no search running", vim.log.levels.WARN)
+        return
+    end
+    abort()
+
+    local bufnr = panel.find_buf()
+    if bufnr and panel.is_panel(bufnr) then
+        panel.set_message(bufnr, "search cancelled", "GreplaceLimit")
+    end
+    _notify("search cancelled")
+end
+
 --- Re-run the query the panel was opened with, discarding unapplied edits.
+--- Not what a bare `:Greplace` does -- that cancels; this is for a mapping
+--- that wants the list brought up to date with the files underneath it.
 function M.refresh()
     local bufnr = panel.find_buf()
     local state = bufnr and panel.state(bufnr)
@@ -153,14 +171,14 @@ end
 --- `:h <f-args>` the rule for the query too: a space that belongs to the query
 --- is written `\ `, `\\` is a backslash, and every other backslash -- `\d`,
 --- `\s` -- reaches rg as written. With no words at all -- not with a blank
---- query, which `:Greplace \ ` is a legitimate way to write -- re-run the
---- last one.
+--- query, which `:Greplace \ ` is a legitimate way to write -- cancel the
+--- search in flight.
 ---@param _cmd string
 ---@param fargs string[]  the argument line, as Neovim split it
 ---@param _opts vim.api.keyset.create_user_command.command_args
 function M.run(_cmd, fargs, _opts)
     if #fargs == 0 then
-        M.refresh()
+        M.cancel()
     else
         M.open(table.concat(fargs, " "))
     end
@@ -177,7 +195,7 @@ end
 ---@param _opts vim.api.keyset.create_user_command.command_args
 function M.run_ex(_cmd, fargs, _opts)
     if #fargs == 0 then
-        M.refresh()
+        M.cancel()
         return
     end
 

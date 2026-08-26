@@ -50,7 +50,7 @@ themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 | Command | Effect |
 | --- | --- |
 | `:Greplace foo bar` | literal search for `foo bar` (smart-case) |
-| `:Greplace` | with no query: re-run the last one, discarding unapplied edits |
+| `:Greplace` | with no query: cancel the search still running |
 
 Everything after `:Greplace` is the query, and it is always searched
 literally — quotes, backslashes and leading dashes included. It is read by
@@ -82,7 +82,7 @@ rather than given a list.
 The `--` is what ends the flags: nothing after the first bare one is read as
 one, so a query may hold leading dashes, quotes and another `--`. A line
 without it is an error rather than a guess at where the flags stopped;
-with no arguments at all, `:GreplaceEx` re-runs the last search like
+with no arguments at all, `:GreplaceEx` cancels the search still running, like
 `:Greplace`. Anything else that is wrong with the line — an unknown flag, a
 value flag left without one — is reported instead of searched.
 

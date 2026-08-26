@@ -115,19 +115,31 @@ describe(":Greplace", function()
         assert.are.same({ [[^alpha\s+ -- literal]] }, panel_lines(bufnr))
     end)
 
-    it("re-runs the last query when given no query", function()
+    it("cancels the search in flight when given no query", function()
         write_file("a.txt", { "hit one" })
-        local bufnr = assert(run("Greplace hit"))
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "scribbled over" })
-
-        write_file("b.txt", { "hit two" })
+        -- Start a search and stop it before it can land: `:Greplace` with no
+        -- query cancels, and the results never arrive.
+        vim.cmd("Greplace hit")
         vim.cmd("Greplace")
-        assert.is_true(vim.wait(5000, function()
-            return #panel_lines(bufnr) == 2
-        end, 20))
-        local lines = panel_lines(bufnr)
-        table.sort(lines)
-        assert.are.same({ "hit one", "hit two" }, lines)
+
+        local bufnr = assert(require("greplace.panel").find_buf())
+        -- The panel is left with its status line, never with a result.
+        local function has_results()
+            local lines = panel_lines(bufnr)
+            return #lines > 1 or lines[1] ~= ""
+        end
+        assert.is_false(has_results())
+        assert.is_false(vim.wait(300, has_results, 20))
+    end)
+
+    it("says so when there is no search to cancel", function()
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("Greplace")
+        vim.cmd("GreplaceEx")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no search running"))
     end)
 
     it("opens the source of the line under the cursor on <CR>", function()
@@ -257,7 +269,7 @@ describe(":Greplace", function()
             panel_lines(assert(run([[Greplace two\ words]]))))
 
         -- A query of nothing but a space is a query, not the empty line that
-        -- re-runs the last search.
+        -- cancels the search in flight.
         assert.are.same({ "two words here" }, panel_lines(assert(run([[Greplace \ ]]))))
     end)
 
