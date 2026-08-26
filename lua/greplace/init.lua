@@ -13,12 +13,14 @@ local M = {}
 --   GreplaceEx <flags> -- <q> the same search with `greplace.rgflags`'s flags
 --                             (`--filter *.lua --hidden -- <q>`): a narrowed
 --                             file set, a regex, a case rule
+--   GreplaceQf                the same panel over the quickfix list, whatever
+--                             filled it, instead of a search of its own
 --
--- This module owns both command bodies, as `M.run` and `M.run_ex`, plus the
--- API they are a thin skin over (`M.open`, `M.cancel`, `M.refresh`); the commands
--- themselves are registered in `plugin/greplace.lua`, and the work lives in
--- `greplace.rgflags` / `greplace.search` /
--- `greplace.panel` / `greplace.apply`.
+-- This module owns the command bodies, as `M.run`, `M.run_ex` and `M.run_qf`,
+-- plus the API they are a thin skin over (`M.open`, `M.open_qf`, `M.cancel`,
+-- `M.refresh`); the commands themselves are registered in
+-- `plugin/greplace.lua`, and the work lives in `greplace.rgflags` /
+-- `greplace.search` / `greplace.qflist` / `greplace.panel` / `greplace.apply`.
 -- ---------------------------------------------------------------------------
 
 local config = require("greplace.config")
@@ -131,6 +133,35 @@ function M.open(query, opts)
         end)
 end
 
+--- Open the panel on the current quickfix list: every entry's line, read from
+--- the file it names, editable and written back exactly as a search's results
+--- are. Whatever filled the list -- `:grep`, `:vimgrep`, an LSP, a test runner
+--- -- is beside the point; only the file and line of each entry are used.
+function M.open_qf()
+    local root             = search.resolve_root(nil)
+    local matches, dropped = require("greplace.qflist").matches(root)
+
+    if #matches == 0 then
+        _notify("no editable lines in the quickfix list", vim.log.levels.WARN)
+        return
+    end
+
+    -- A search still filling this same panel would land on top of the list.
+    abort()
+    panel.open(matches, {
+        query    = "quickfix list",
+        source   = "quickfix",
+        root     = root,
+        height   = config.options.height,
+        on_write = on_write,
+    })
+
+    if dropped > 0 then
+        _notify(("%d quickfix entr%s skipped (no file, or line not readable)")
+            :format(dropped, dropped == 1 and "y" or "ies"), vim.log.levels.WARN)
+    end
+end
+
 --- Stop the search in flight, leaving the panel showing that it was stopped
 --- rather than the query it will never finish. Nothing is re-run: a search
 --- that is taking too long is stopped so that a narrower one can be typed.
@@ -148,7 +179,8 @@ function M.cancel()
     _notify("search cancelled")
 end
 
---- Re-run the query the panel was opened with, discarding unapplied edits.
+--- Rebuild the panel from what it was opened on, discarding unapplied edits:
+--- the query for a search, the quickfix list as it now stands for `:GreplaceQf`.
 --- Not what a bare `:Greplace` does -- that cancels; this is for a mapping
 --- that wants the list brought up to date with the files underneath it.
 function M.refresh()
@@ -158,7 +190,11 @@ function M.refresh()
         _notify("no active search", vim.log.levels.WARN)
         return
     end
-    M.open(state.query, { cwd = state.root, flags = state.flags })
+    if state.source == "quickfix" then
+        M.open_qf()
+    else
+        M.open(state.query, { cwd = state.root, flags = state.flags })
+    end
 end
 
 --- `:Greplace`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
@@ -210,6 +246,19 @@ function M.run_ex(_cmd, fargs, _opts)
         flags = parsed.flags,
         cwd   = parsed.flags.dir and vim.fn.expand(parsed.flags.dir) or nil,
     })
+end
+
+--- `:GreplaceQf`'s implementation. It takes no arguments: the quickfix list is
+--- the whole input.
+---@param _cmd string
+---@param fargs string[]  the argument line, as Neovim split it
+---@param _opts vim.api.keyset.create_user_command.command_args
+function M.run_qf(_cmd, fargs, _opts)
+    if #fargs > 0 then
+        _notify("GreplaceQf takes no arguments", vim.log.levels.ERROR)
+        return
+    end
+    M.open_qf()
 end
 
 ---@param opts greplace.Config?

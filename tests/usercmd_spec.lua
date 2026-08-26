@@ -2,6 +2,7 @@
 -- own runtimepath entry is relative, so a lazy `require` mid-test would miss.
 require("greplace")
 require("greplace.apply")
+require("greplace.qflist")
 
 local usercmd  = require("greplace.util.usercmd")
 local panel    = require("greplace.panel")
@@ -279,6 +280,54 @@ describe(":Greplace", function()
         -- of Neovim's split, so both spell a space `\ `.
         local bufnr = assert(run([[GreplaceEx --dir my\ src -- two\ words]]))
         assert.are.same({ "two words here" }, panel_lines(bufnr))
+    end)
+
+    it("fills the panel from the quickfix list, line by line", function()
+        write_file("a.txt", { "alpha one", "beta two" })
+        write_file("b.txt", { "gamma three" })
+        vim.fn.setqflist({
+            { filename = _root .. "/a.txt", lnum = 2, col = 1, end_col = 5, text = "beta" },
+            { filename = _root .. "/b.txt", lnum = 1, text = "whatever the producer wrote" },
+        })
+
+        -- Synchronous: there is no search to wait for.
+        vim.cmd("GreplaceQf")
+        local bufnr = assert(panel.find_buf())
+        -- The entry's own `text` is ignored; the source line is read back.
+        assert.are.same({ "beta two", "gamma three" }, panel_lines(bufnr))
+    end)
+
+    it("writes an edited quickfix panel back to the source lines", function()
+        write_file("a.txt", { "alpha one" })
+        vim.fn.setqflist({ { filename = _root .. "/a.txt", lnum = 1 } })
+        vim.cmd("GreplaceQf")
+
+        local bufnr = assert(panel.find_buf())
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "alpha ONE" })
+        vim.cmd("silent write")
+
+        local target = assert(require("greplace.util").find_buf(_root .. "/a.txt"))
+        assert.are.same({ "alpha ONE" }, vim.api.nvim_buf_get_lines(target, 0, -1, false))
+    end)
+
+    it("lists a line once however many quickfix entries point at it", function()
+        write_file("a.txt", { "alpha alpha" })
+        vim.fn.setqflist({
+            { filename = _root .. "/a.txt", lnum = 1, col = 1, end_col = 6 },
+            { filename = _root .. "/a.txt", lnum = 1, col = 7, end_col = 12 },
+        })
+        vim.cmd("GreplaceQf")
+        assert.are.same({ "alpha alpha" }, panel_lines(assert(panel.find_buf())))
+    end)
+
+    it("says so when the quickfix list holds nothing it can edit", function()
+        vim.fn.setqflist({})
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("GreplaceQf")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no editable lines"))
     end)
 
     it("loads edited files with their filetype set", function()

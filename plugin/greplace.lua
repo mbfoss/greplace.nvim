@@ -31,6 +31,23 @@ end, {
 -- `--`, then the query. The whole line is split by Vim's own rules, the same
 -- ones `:Greplace` reads its query by; the separator is what keeps a query's
 -- own leading dashes, quotes and further `--`s out of the flag parser.
+-- `:GreplaceQf` is the same panel over the quickfix list rather than over a
+-- search of its own: `:grep`, `:vimgrep`, an LSP's references or anything else
+-- that fills the list becomes an editable, writable buffer.
+vim.api.nvim_create_user_command("GreplaceQf", function(opts)
+    usercmd = usercmd or require("greplace.util.usercmd")
+    usercmd.handle(opts, function(cmd, args, cmd_opts)
+        greplace = greplace or require("greplace")
+        return greplace.run_qf(cmd, args, cmd_opts)
+    end)
+end, {
+    desc     = "Edit the quickfix list's lines in a greplace buffer",
+    -- `nargs = "*"` rather than `"0"`: the body reports the extra words as an
+    -- error of its own, the way the other two report a bad line.
+    nargs    = "*",
+    complete = function() return {} end,
+})
+
 vim.api.nvim_create_user_command("GreplaceEx", function(opts)
     usercmd = usercmd or require("greplace.util.usercmd")
     usercmd.handle(opts, function(cmd, args, cmd_opts)

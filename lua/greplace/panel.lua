@@ -194,7 +194,10 @@ local function set_winbar(bufnr, status)
     if not config.options.winbar then return end
     if not _state[bufnr] then return end
 
-    local text = status
+    -- A final message outlives the buffer write that showed it: writing the
+    -- status line into the buffer is itself an edit, and the throttled redraw
+    -- it triggers would otherwise put the counts of an empty panel back.
+    local text = status or _state[bufnr].message
     if not text then
         local st = M.stats(bufnr)
         text = st and string.format("%s  %s  %s",
@@ -512,6 +515,8 @@ end
 ---@param msg   string
 ---@param hl    string?
 function M.set_message(bufnr, msg, hl)
+    if not _state[bufnr] then return end
+    _state[bufnr].message = msg
     set_status(bufnr, { { msg, hl or "GreplaceSeparator" } })
     set_winbar(bufnr, msg)
 end
@@ -526,6 +531,7 @@ function M.open_loading(opts)
         query   = opts.query,
         root    = opts.root,
         flags   = opts.flags,
+        source  = "search",
         entries = {},
         virt    = {},
         hidden  = {},
@@ -543,7 +549,7 @@ end
 
 --- Open (or reuse) the panel for a result set.
 ---@param matches  greplace.Match[]
----@param opts     { query:string, root:string, flags:table?, height:integer, truncated:boolean?, on_write:fun(bufnr:integer) }
+---@param opts     { query:string, root:string, flags:table?, height:integer, truncated:boolean?, source:string?, on_write:fun(bufnr:integer) }
 ---@return integer bufnr
 function M.open(matches, opts)
     local bufnr = M.find_buf() or create_buf(opts.on_write)
@@ -551,6 +557,9 @@ function M.open(matches, opts)
         query     = opts.query,
         root      = opts.root,
         flags     = opts.flags,
+        -- Where the list came from, so a re-run knows what to run again: a
+        -- search ("search", the default) or the quickfix list ("quickfix").
+        source    = opts.source or "search",
         entries   = {},
         virt      = {},
         hidden    = {},

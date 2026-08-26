@@ -42,8 +42,8 @@ from being undone.
 }
 ```
 
-`setup()` is optional; the `:Greplace` and `:GreplaceEx` commands register
-themselves, and nothing under `lua/greplace/` is loaded until one is first run.
+`setup()` is optional; the `:Greplace`, `:GreplaceEx` and `:GreplaceQf`
+commands register themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 
 ## Usage
 
@@ -51,6 +51,7 @@ themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 | --- | --- |
 | `:Greplace foo bar` | literal search for `foo bar` (smart-case) |
 | `:Greplace` | with no query: cancel the search still running |
+| `:GreplaceQf` | fill the panel from the quickfix list instead of a search |
 
 Everything after `:Greplace` is the query, and it is always searched
 literally — quotes, backslashes and leading dashes included. It is read by
@@ -113,6 +114,22 @@ File-selection flags are also applied to open buffers, in-process — ripgrep se
 the buffer pass as one nameless stdin stream, so its own `-g` and `-t` cannot
 reach it, and without that a `--filter *.lua` search would quietly report
 matches from a `.md` you have open.
+
+### `:GreplaceQf` — editing the quickfix list
+
+`:GreplaceQf` takes no arguments and runs no search: it fills the same panel
+from the quickfix list as it now stands, so whatever put entries there —
+`:grep`, `:vimgrep`, an LSP's references, a test runner — becomes an editable,
+writable list. Writing the buffer pushes the edits back exactly as it does for
+a search.
+
+Only the file and line of each entry are used. The entry's own text is
+ignored — `:vimgrep` trims it, an LSP replaces it with a message — and the line
+is read back from the file, or from its buffer when it has one, so what the
+panel shows is the text a replacement will land on. Entries with no file, no
+line number, or a line that can no longer be read are skipped, with a note
+saying how many. Several entries on one line are listed once: the panel edits
+lines, and offering the same line twice would apply the edit twice.
 
 The panel opens as soon as the search is triggered and says that it is
 searching until the results replace it.
