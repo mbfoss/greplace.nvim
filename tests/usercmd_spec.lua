@@ -32,6 +32,21 @@ local function run(cmd)
     return panel.find_buf()
 end
 
+--- Run a search that is expected to find nothing, and wait for the panel to
+--- say so: no entries ever arrive, so there is nothing else to wait on.
+---@param cmd string
+---@return string  the message the panel ended up showing
+local function run_empty(cmd)
+    vim.cmd(cmd)
+    vim.wait(5000, function()
+        local bufnr = panel.find_buf()
+        local state = bufnr and panel.state(bufnr)
+        return state ~= nil and state.message ~= nil
+    end, 20)
+    local state = assert(panel.state(assert(panel.find_buf())))
+    return assert(state.message)
+end
+
 ---@param bufnr integer
 ---@return string[]
 local function panel_lines(bufnr)
@@ -240,7 +255,7 @@ describe(":Gsearch / :Greplace", function()
         write_file("b.md", { "hit md" })
         write_file(".hidden/c.lua", { "hit hidden" })
 
-        local bufnr = assert(run("Gsearch --filter *.lua --hidden -- hit"))
+        local bufnr = assert(run("Gsearch --glob *.lua --hidden -- hit"))
         assert.are.same({ "hit hidden", "hit lua" }, panel_lines(bufnr))
 
         assert.are.same({ "hit md" },
@@ -248,7 +263,7 @@ describe(":Gsearch / :Greplace", function()
         -- An excluding glob, and the `.gitignore`-blind default: without
         -- `hidden` the dotfile is out again.
         assert.are.same({ "hit lua" },
-            panel_lines(assert(run("Gsearch --filter *.lua --filter !b.* -- hit"))))
+            panel_lines(assert(run("Gsearch --glob *.lua --glob !b.* -- hit"))))
     end)
 
     it("filters open buffers the same way, which rg cannot do itself", function()
@@ -261,10 +276,27 @@ describe(":Gsearch / :Greplace", function()
         vim.api.nvim_buf_set_lines(mdbuf, 0, -1, false, { "hit md, unsaved" })
 
         assert.are.same({ "hit lua" },
-            panel_lines(assert(run("Gsearch --filter *.lua -- hit"))))
+            panel_lines(assert(run("Gsearch --glob *.lua -- hit"))))
         -- Unfiltered, that same unsaved line is found.
         assert.are.same({ "hit lua", "hit md, unsaved" },
             panel_lines(assert(run("Gsearch -- hit"))))
+    end)
+
+    it("matches case in `--glob` and ignores it in `--iglob`, on both passes", function()
+        -- Same file twice over: once on disk, where rg does the filtering,
+        -- and once as an unsaved buffer, where greplace does. A glob whose
+        -- case does not match the file must leave both out, and `--iglob`
+        -- must take both in -- the two passes agreeing is the whole point.
+        write_file("disk.LUA", { "hit on disk" })
+        write_file("open.LUA", { "nothing here" })
+        local buf = assert(require("greplace.util").ensure_buf(_root .. "/open.LUA"))
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hit unsaved" })
+
+        assert.is_truthy(run_empty("Gsearch --glob *.lua -- hit"):match("no matches"))
+
+        local found = panel_lines(assert(run("Gsearch --iglob *.lua -- hit")))
+        table.sort(found)
+        assert.are.same({ "hit on disk", "hit unsaved" }, found)
     end)
 
     it("leaves a `--` past the separator to the query, and rejects flags without one", function()
@@ -302,7 +334,7 @@ describe(":Gsearch / :Greplace", function()
             vim.fn.getcompletion("Gsearch ", "cmdline"), "--hidden"))
 
         -- A flag name, whether or not a leading `-` has been typed.
-        assert.are.same({ "--filter" }, complete("--fi", "Gsearch --fi"))
+        assert.are.same({ "--follow" }, complete("--fo", "Gsearch --fo"))
         assert.is_truthy(vim.tbl_contains(complete("", "Gsearch "), "--hidden"))
 
         -- A value: bare after `--type`, and carrying its flag back when glued.
@@ -312,7 +344,7 @@ describe(":Gsearch / :Greplace", function()
         -- A switch already written is not offered again; a repeatable flag is.
         local after = complete("--", "Gsearch --hidden --")
         assert.is_false(vim.tbl_contains(after, "--hidden"))
-        assert.is_true(vim.tbl_contains(after, "--filter"))
+        assert.is_true(vim.tbl_contains(after, "--glob"))
 
         -- Past the separator the words are a query, not a list.
         assert.are.same({}, complete("h", "Gsearch -- h"))
@@ -344,7 +376,7 @@ describe(":Gsearch / :Greplace", function()
         assert.is_truthy(err("--alpha"):match("no query"))
         assert.is_truthy(err("--bogus -- hit"):match("unknown flag: %-%-bogus"))
         assert.is_truthy(err("--regex=1 -- hit"):match("takes no value"))
-        assert.is_truthy(err("--filter -- hit"):match("needs a glob"))
+        assert.is_truthy(err("--glob -- hit"):match("needs a glob"))
         assert.is_truthy(err("filter *.lua -- hit"):match("not a flag"))
     end)
 

@@ -47,6 +47,8 @@ local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
 ---@field hidden  table<integer, boolean>  anchors whose line has been removed
 ---@field truncated boolean  the search stopped at the match limit, so this is
 ---                          the first `limit` matches of more
+---@field message string?  final status -- "no matches", or the error that
+---                       ended the search -- kept so a redraw can restore it
 
 ---@type table<integer, greplace.PanelState>
 local _state = {}

@@ -10,7 +10,7 @@ local M = {}
 --
 --   Gsearch <query>           grep for <query>, literally
 --   Gsearch <flags> -- <q>    the same search with `greplace.rgflags`'s flags
---                             (`--filter *.lua --hidden -- <q>`): a narrowed
+--                             (`--glob *.lua --hidden -- <q>`): a narrowed
 --                             file set, a regex, a case rule. A line starting
 --                             with `--` is a flag line, so a query that starts
 --                             with one is written after a bare `--`

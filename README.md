@@ -83,7 +83,7 @@ A `:Gsearch` line that opens with `--` is a flag line: flags first, then a bare
 `--`, then the query.
 
 ```
-:Gsearch --filter *.lua --filter !*_spec.lua --hidden -- handle_event
+:Gsearch --glob *.lua --glob !*_spec.lua --hidden -- handle_event
 :Gsearch --type md --dir docs -- TODO
 :Gsearch --regex --word -- ^fn\s+\w+
 ```
@@ -115,7 +115,8 @@ the `--` nothing completes at all — those words are a query, not a list.
 | Flag | Effect |
 | --- | --- |
 | `--dir <path>` | search root (default: the working directory) |
-| `--filter <glob>` | glob filter, repeatable: `*.txt`, `!*.lua`, `**/dir/**` |
+| `--glob <glob>` | glob filter, repeatable: `*.txt`, `!*.lua`, `**/dir/**` |
+| `--iglob <glob>` | the same, matched regardless of case |
 | `--type <name>` | rg file type, repeatable: `lua`, `rust`, `!md` (see `rg --type-list`) |
 | `--max-depth <n>` | maximum directory depth to descend |
 | `--regex` | treat the query as a regex |
@@ -132,8 +133,14 @@ contract is that a shown line is the source line byte for byte, and `--replace`,
 
 File-selection flags are also applied to open buffers, in-process — ripgrep sees
 the buffer pass as one nameless stdin stream, so its own `-g` and `-t` cannot
-reach it, and without that a `--filter *.lua` search would quietly report
+reach it, and without that a `--glob *.lua` search would quietly report
 matches from a `.md` you have open.
+
+`--glob` and `--iglob` are ripgrep's own two spellings and mean what they do
+there: `--glob *.lua` leaves out a file named `A.LUA`, `--iglob *.lua` takes it
+in. Both passes agree on that — the in-process globs are compiled to match the
+case rule the flag names, so a file is never filtered one way on disk and the
+other way in a buffer.
 
 ### `:Greplace qf` — editing the quickfix list
 

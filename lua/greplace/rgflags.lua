@@ -8,7 +8,7 @@ local M = {}
 -- concatenated text of open buffers fed to `rg -` -- and a file-selection flag
 -- only reaches the first of those: rg sees the buffer pass as one nameless
 -- stream, so `-g` and `--type` have nothing to filter there. Left at that, a
--- `--filter *.lua` search would skip `.md` files on disk and then report
+-- `--glob *.lua` search would skip `.md` files on disk and then report
 -- matches from the `.md` you happen to have open. So the same globs are
 -- compiled here and applied to the buffer list before the stream is built, and
 -- rg's own file types are read once (`rg --type-list`) so `--type lua` can be
@@ -77,7 +77,8 @@ end
 ---@type greplace.rgflags.FlagDef[]
 M.FLAGS = {
     { name = "dir",       arg = "path", complete = "dir", desc = "search root directory" },
-    { name = "filter",    arg = "glob", multi = true, desc = "glob filter, repeatable: *.txt, !*.lua, **/dir/**" },
+    { name = "glob",      arg = "glob", multi = true, desc = "glob filter, repeatable: *.txt, !*.lua, **/dir/**" },
+    { name = "iglob",     arg = "glob", multi = true, desc = "the same, matched regardless of case" },
     { name = "type",      arg = "name", multi = true, complete = complete_type, desc = "rg file type, repeatable: lua, rust, !md (rg --type-list)" },
     { name = "max-depth", arg = "n", desc = "max directory depth to descend" },
     { name = "regex",     desc = "treat the query as a regex" },
@@ -99,7 +100,8 @@ for _, def in ipairs(M.FLAGS) do _by_name[def.name] = def end
 ---the two hyphenated ones are read as `flags["no-ignore"]`.
 ---@class greplace.RgFlags
 ---@field dir       string?
----@field filter    string[]?
+---@field glob      string[]?
+---@field iglob     string[]?
 ---@field type      string[]?
 ---@field max-depth string?
 ---@field regex     boolean?
@@ -139,14 +141,20 @@ end
 ---@param flags table
 ---@return string[] args
 function M.file_args(flags)
-    local args = { "--glob-case-insensitive" }
+    local args = {}
 
     if flags.follow then args[#args + 1] = "--follow" end
     if flags.hidden then args[#args + 1] = "--hidden" end
     if flags["no-ignore"] then args[#args + 1] = "--no-ignore" end
 
-    for _, g in ipairs(flags.filter or {}) do
+    -- rg's own two spellings, and they are passed through as themselves: `-g`
+    -- matches case as written, `--iglob` does not.
+    for _, g in ipairs(flags.glob or {}) do
         args[#args + 1] = "-g"
+        args[#args + 1] = g
+    end
+    for _, g in ipairs(flags.iglob or {}) do
+        args[#args + 1] = "--iglob"
         args[#args + 1] = g
     end
     for _, t in ipairs(flags.type or {}) do
@@ -168,31 +176,44 @@ function M.file_args(flags)
 end
 
 --- Compile a glob list, dropping any that fail to compile.
----@param globs string[]
+---@param globs      string[]
+---@param ignorecase boolean?  compile them case-insensitively (`--iglob`)
+---@param into       vim.regex[]?  append to this list rather than a new one
 ---@return vim.regex[]?  nil when none compiled, so a bad glob filters nothing
-local function compile_globs(globs)
-    local out = {}
+local function compile_globs(globs, ignorecase, into)
+    local out = into or {}
     for _, g in ipairs(globs) do
-        local re = strutil.compile_glob(g)
+        local re = strutil.compile_glob(g, ignorecase)
         if re then out[#out + 1] = re end
     end
     return #out > 0 and out or nil
 end
 
---- Split a `filter` list ("*.lua", "!*_spec.lua") into compiled include and
---- exclude regexes, for the buffer pass rg's own `-g` cannot reach.
----@param filters string[]?
+--- Split the glob lists ("*.lua", "!*_spec.lua") into compiled include and
+--- exclude regexes, for the buffer pass rg's own `-g` cannot reach. `--glob`
+--- and `--iglob` differ only in how they are compiled here -- exactly as they
+--- differ to rg -- so the two passes agree on which buffers a case-sensitive
+--- glob leaves out.
+---@param globs  string[]?  `--glob` values
+---@param iglobs string[]?  `--iglob` values
 ---@return vim.regex[]? include, vim.regex[]? exclude
-local function compile_filter_globs(filters)
-    local include, exclude = {}, {}
-    for _, g in ipairs(filters or {}) do
-        if g:sub(1, 1) == "!" then
-            exclude[#exclude + 1] = g:sub(2)
-        else
-            include[#include + 1] = g
+local function compile_filter_globs(globs, iglobs)
+    local include, exclude = { {}, {} }, { {}, {} }
+    for i, list in ipairs({ globs or {}, iglobs or {} }) do
+        for _, g in ipairs(list) do
+            if g:sub(1, 1) == "!" then
+                table.insert(exclude[i], g:sub(2))
+            else
+                table.insert(include[i], g)
+            end
         end
     end
-    return compile_globs(include), compile_globs(exclude)
+
+    local inc = compile_globs(include[1], false)
+    inc       = compile_globs(include[2], true, inc)
+    local exc = compile_globs(exclude[1], false)
+    exc       = compile_globs(exclude[2], true, exc)
+    return inc, exc
 end
 
 --- The same for `type`: rg's `-t` filters the files it walks, not stdin, so the
@@ -223,7 +244,7 @@ end
 ---@param flags table
 ---@return fun(relpath:string):boolean
 function M.buffer_filter(flags)
-    local include, exclude           = compile_filter_globs(flags.filter)
+    local include, exclude           = compile_filter_globs(flags.glob, flags.iglob)
     local type_include, type_exclude = compile_type_globs(flags.type)
     local max_depth                  = tonumber(flags["max-depth"])
 

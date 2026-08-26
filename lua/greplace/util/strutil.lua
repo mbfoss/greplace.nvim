@@ -260,11 +260,16 @@ end
 
 --- Invalid globs (e.g. a half-typed `*.{lua`) return nil plus the error rather
 --- than raising; callers compile globs from live user input.
+---
+--- `vim.regex` is case-sensitive whatever `'ignorecase'` says, so an
+--- insensitive glob is asked for explicitly: `\c` anywhere in a Vim pattern
+--- forces the whole match case-insensitive.
 ---@param glob string
+---@param ignorecase boolean?  match regardless of case (rg's `--iglob`)
 ---@return vim.regex? regex, string? err
-function M.compile_glob(glob)
+function M.compile_glob(glob, ignorecase)
 	local ok, res = pcall(function()
-		return vim.regex(vim.fn.glob2regpat(glob))
+		return vim.regex((ignorecase and "\\c" or "") .. vim.fn.glob2regpat(glob))
 	end)
 	if not ok then
 		return nil, tostring(res)

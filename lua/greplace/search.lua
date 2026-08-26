@@ -108,7 +108,7 @@ end
 --- flags, which rg cannot apply to this pass: it reads the buffers as one
 --- nameless stdin stream.
 ---@param root string
----@param keep fun(relpath:string):boolean|nil
+---@param keep (fun(relpath:string):boolean)?
 ---@return greplace.OpenBuf[]
 function M.open_buffers(root, keep)
     local out = {}

@@ -13,7 +13,7 @@ local usercmd ---@type table?
 local greplace ---@type table?
 
 -- `:Gsearch` is the one that searches: a query taken literally, or -- when the
--- line opens with `--` -- a flag line, `--filter *.lua --hidden -- query`.
+-- line opens with `--` -- a flag line, `--glob *.lua --hidden -- query`.
 vim.api.nvim_create_user_command("Gsearch", function(opts)
     usercmd = usercmd or require("greplace.util.usercmd")
     usercmd.handle(opts, function(cmd, args, cmd_opts)
