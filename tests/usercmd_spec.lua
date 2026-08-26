@@ -180,7 +180,7 @@ describe(":Greplace", function()
             panel_lines(assert(run("GreplaceEx -- hit"))))
     end)
 
-    it("takes the query after ` -- ` verbatim, and rejects a line without it", function()
+    it("leaves a `--` past the separator to the query, and rejects a line without one", function()
         write_file("a.txt", { "a -- b", "alpha" })
         assert.are.same({ "a -- b" }, panel_lines(assert(run("GreplaceEx -- a -- b"))))
 
@@ -239,7 +239,7 @@ describe(":Greplace", function()
             -- Split the way Neovim splits it before a command body ever sees
             -- it, so what is tested is what `:GreplaceEx` would parse.
             local fargs = vim.split(raw, "%s+", { trimempty = true })
-            local parsed, e = rgflags.parse(fargs, raw)
+            local parsed, e = rgflags.parse(fargs)
             assert.is_nil(parsed)
             return assert(e)
         end
@@ -251,10 +251,22 @@ describe(":Greplace", function()
         assert.is_truthy(err("filter *.lua -- hit"):match("not a flag"))
     end)
 
-    it("takes a flag value with an escaped space, as `:h <f-args>` has it", function()
-        write_file("my src/a.txt", { "hit here" })
-        local bufnr = assert(run([[GreplaceEx --dir my\ src -- hit]]))
-        assert.are.same({ "hit here" }, panel_lines(bufnr))
+    it("takes an escaped space in a `:Greplace` query", function()
+        write_file("a.txt", { "two words here" })
+        assert.are.same({ "two words here" },
+            panel_lines(assert(run([[Greplace two\ words]]))))
+
+        -- A query of nothing but a space is a query, not the empty line that
+        -- re-runs the last search.
+        assert.are.same({ "two words here" }, panel_lines(assert(run([[Greplace \ ]]))))
+    end)
+
+    it("takes an escaped space, as `:h <f-args>` has it, on either side of `--`", function()
+        write_file("my src/a.txt", { "two words here" })
+        -- The flag value and the query are read the same way: both are words
+        -- of Neovim's split, so both spell a space `\ `.
+        local bufnr = assert(run([[GreplaceEx --dir my\ src -- two\ words]]))
+        assert.are.same({ "two words here" }, panel_lines(bufnr))
     end)
 
     it("loads edited files with their filetype set", function()

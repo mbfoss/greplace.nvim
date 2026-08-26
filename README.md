@@ -52,10 +52,12 @@ themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 | `:Greplace foo bar` | literal search for `foo bar` (smart-case) |
 | `:Greplace` | with no query: re-run the last one, discarding unapplied edits |
 
-Everything after `:Greplace` is the query, verbatim — spaces, quotes,
-backslashes and leading dashes included, and it is always searched literally.
-A regex, a case rule or a narrowed file set is asked for through `:GreplaceEx`
-below.
+Everything after `:Greplace` is the query, and it is always searched
+literally — quotes, backslashes and leading dashes included. It is read by
+Vim's own rules (`:h <f-args>`), so a run of whitespace inside the query is
+written `\ ` per space and a literal backslash `\\`; every other backslash,
+`\d` and `\s` among them, stands for itself. A regex, a case rule or a
+narrowed file set is asked for through `:GreplaceEx` below.
 
 ### `:GreplaceEx` — searching with flags
 
@@ -68,15 +70,18 @@ up. Flags come first, then a bare `--`, then the query:
 :GreplaceEx --regex --word -- ^fn\s+\w+
 ```
 
-Flags are written `--switch`, `--key value` or `--key=value`, and are split by
-Vim's own rules (`:h <f-args>`): unescaped whitespace separates them, and a
-backslash escapes the character after it, so a value containing a space is
-written `--dir my\ src`. Quotes are not special. A repeatable flag is repeated
+The whole line — flags and query alike — is split by Vim's own rules (`:h
+<f-args>`): unescaped whitespace separates words, `\ ` is a space inside one
+and `\\` a backslash, and every other backslash stands for itself. So a space
+is written `\ ` wherever it belongs to what you mean, in a flag value
+(`--dir my\ src`) or in the query (`-- two\ words`), while a regex keeps its
+`\s` and `\w` untouched. Quotes are not special. Flags are written
+`--switch`, `--key value` or `--key=value`, and a repeatable flag is repeated
 rather than given a list.
 
-The `--` is what keeps the query verbatim: nothing after the first bare one is
-parsed, so a query may hold spaces, quotes, leading dashes and another `--`. A
-line without it is an error rather than a guess at where the flags stopped;
+The `--` is what ends the flags: nothing after the first bare one is read as
+one, so a query may hold leading dashes, quotes and another `--`. A line
+without it is an error rather than a guess at where the flags stopped;
 with no arguments at all, `:GreplaceEx` re-runs the last search like
 `:Greplace`. Anything else that is wrong with the line — an unknown flag, a
 value flag left without one — is reported instead of searched.
@@ -173,7 +178,7 @@ require("greplace").setup({
 | `GreplaceLocation` | `Directory` | `file:line` of an on-disk match |
 | `GreplaceBufferLocation` | `Special` | `file:line` of a match in an open buffer |
 | `GreplaceSeparator` | `Comment` | the `│` between location and text |
-| `GreplaceMatch` | `Search` | the matched text itself |
+| `GreplaceMatch` | `Label` | the matched text itself |
 | `GreplaceLimit` | `WarningMsg` | the winbar's "limit of N reached" note |
 
 ## Development

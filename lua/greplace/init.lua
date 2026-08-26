@@ -148,34 +148,41 @@ end
 --- being loaded: it hands `util/usercmd` a wrapper that requires us on the
 --- first invocation.
 ---
---- The query is the command line verbatim rather than a parsed argument list:
---- a grep query is one string, and its spaces, quotes and backslashes all
---- belong to it. With no query at all, re-run the last one.
+--- The query is one string, so the words Neovim split off the command line are
+--- joined back into one with the single space that separated them. That makes
+--- `:h <f-args>` the rule for the query too: a space that belongs to the query
+--- is written `\ `, `\\` is a backslash, and every other backslash -- `\d`,
+--- `\s` -- reaches rg as written. With no words at all -- not with a blank
+--- query, which `:Greplace \ ` is a legitimate way to write -- re-run the
+--- last one.
 ---@param _cmd string
----@param opts vim.api.keyset.create_user_command.command_args
-function M.run(_cmd, opts)
-    local query = vim.trim(opts.args)
-    if query == "" then
+---@param fargs string[]  the argument line, as Neovim split it
+---@param _opts vim.api.keyset.create_user_command.command_args
+function M.run(_cmd, fargs, _opts)
+    if #fargs == 0 then
         M.refresh()
     else
-        M.open(query)
+        M.open(table.concat(fargs, " "))
     end
 end
 
 --- `:GreplaceEx`'s implementation: the flags of `greplace.rgflags`, then a bare
---- `--`, then the query verbatim. Same search and same panel as
---- `:Greplace`; only the file set and the match rules are opened up.
+--- `--`, then the query. Same search and same panel as `:Greplace`; only the
+--- file set and the match rules are opened up. Unlike `:Greplace`, which takes
+--- its query as the untouched command line, this one reads the whole line from
+--- Neovim's split, so a space anywhere in it -- in a flag value or in the
+--- query -- is written `\ ` (`:h <f-args>`).
 ---@param _cmd string
 ---@param fargs string[]  the argument line, as Neovim split it
----@param opts vim.api.keyset.create_user_command.command_args
-function M.run_ex(_cmd, fargs, opts)
+---@param _opts vim.api.keyset.create_user_command.command_args
+function M.run_ex(_cmd, fargs, _opts)
     if #fargs == 0 then
         M.refresh()
         return
     end
 
     local rgflags = require("greplace.rgflags")
-    local parsed, err = rgflags.parse(fargs, vim.trim(opts.args))
+    local parsed, err = rgflags.parse(fargs)
     if not parsed then
         _notify(assert(err), vim.log.levels.ERROR)
         return

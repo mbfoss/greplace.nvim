@@ -14,23 +14,23 @@ local greplace ---@type table?
 
 vim.api.nvim_create_user_command("Greplace", function(opts)
     usercmd = usercmd or require("greplace.util.usercmd")
-    usercmd.handle(opts, function(cmd, _, cmd_opts)
+    usercmd.handle(opts, function(cmd, args, cmd_opts)
         greplace = greplace or require("greplace")
-        return greplace.run(cmd, cmd_opts)
+        return greplace.run(cmd, args, cmd_opts)
     end)
 end, {
     desc     = "Grep the working tree into an editable buffer",
     -- `nargs = "*"` rather than `"?"`: a query is one string that may well
-    -- contain spaces, and it is read whole off `opts.args`.
+    -- contain spaces, and it is rejoined from the words Vim split off.
     nargs    = "*",
     complete = function() return {} end,
 })
 
 -- `:GreplaceEx` is the same search with the file set and the match rules
--- opened up: `--filter *.lua --hidden -- query`. Flags first, split by Vim's
--- own rules, then a bare `--`, then the query verbatim -- the
--- separator is what lets a query keep its own spaces, quotes and leading
--- dashes, exactly as it does on `:Greplace`.
+-- opened up: `--filter *.lua --hidden -- query`. Flags first, then a bare
+-- `--`, then the query. The whole line is split by Vim's own rules, the same
+-- ones `:Greplace` reads its query by; the separator is what keeps a query's
+-- own leading dashes, quotes and further `--`s out of the flag parser.
 vim.api.nvim_create_user_command("GreplaceEx", function(opts)
     usercmd = usercmd or require("greplace.util.usercmd")
     usercmd.handle(opts, function(cmd, args, cmd_opts)

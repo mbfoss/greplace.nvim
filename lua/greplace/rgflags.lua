@@ -235,20 +235,20 @@ function M.buffer_filter(flags)
     end
 end
 
---- Read a `:GreplaceEx` command line: the flags Neovim has already split for
---- us, up to the first bare `--`, and the query as the raw line spells it from
---- there on. A grep query's spaces, quotes, backslashes and leading dashes are
---- all its own, so it is never taken from the split -- only the flags are, and
---- they are written the way `:h <f-args>` says: `--switch`, `--key value` or
---- `--key=value`, with `\ ` for a space inside a value.
+--- Read a `:GreplaceEx` command line: the flags up to the first bare `--`,
+--- then the query. The whole line is read from the split Neovim already did
+--- for us, flags and query alike, so one escaping rule covers both -- the one
+--- `:h <f-args>` states: words break on whitespace, `\ ` is a space inside a
+--- word and `\\` a backslash, and every other backslash stands for itself.
+--- So `--dir my\ src -- foo\ bar` searches for `foo bar`, and a query's
+--- quotes, leading dashes and regex escapes (`\d`, `\s`) reach rg untouched.
 ---
 --- Without the separator there is no query, which is an error rather than a
 --- guess at where the flags stopped.
 ---@param fargs string[]  the whole argument line, as Neovim split it
----@param raw   string    the same line, verbatim
 ---@return { flags:table, query:string }? parsed
 ---@return string? err
-function M.parse(fargs, raw)
+function M.parse(fargs)
     local sep
     for i, arg in ipairs(fargs) do
         if arg == "--" then
@@ -260,13 +260,17 @@ function M.parse(fargs, raw)
         return nil, "no query: write the flags, then `--`, then the query"
     end
 
-    -- The query is what follows the separator in the raw line, not the
-    -- rejoined tokens: rejoining them would eat the very spacing and escapes
-    -- the query is entitled to keep.
-    local query = raw:match("^%-%-%s+(.*)$") or raw:match("^.-%s+%-%-%s+(.*)$")
-    if not query or vim.trim(query) == "" then
+    -- Nothing past the separator is the empty query. Whitespace past it is
+    -- not: plain whitespace was consumed by the split, so a word that is
+    -- there at all was written `\ ` and is a space worth searching for.
+    if sep == #fargs then
         return nil, "empty search query"
     end
+
+    -- The query is those words rejoined with the single space that separated
+    -- them: runs of whitespace between them were Neovim's separators, and any
+    -- space the query keeps is already inside a word.
+    local query = table.concat(vim.list_slice(fargs, sep + 1), " ")
 
     local flags = {}
     local i     = 1

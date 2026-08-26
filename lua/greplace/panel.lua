@@ -620,7 +620,11 @@ function M.setup_highlights()
         GreplaceLocation       = { link = "Directory" },
         GreplaceBufferLocation = { link = "Special" },
         GreplaceSeparator      = { link = "Comment" },
-        GreplaceMatch          = { link = "Search" },
+        -- `Label` rather than `Search`: the panel is an ordinary buffer that
+        -- is searched with `/` like any other, and painting the matches in
+        -- `Search` would leave the query's own hits indistinguishable from
+        -- them.
+        GreplaceMatch          = { link = "Label" },
         GreplaceLimit          = { link = "WarningMsg" },
     }
     for name, def in pairs(defaults) do
