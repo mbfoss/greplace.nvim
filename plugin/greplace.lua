@@ -19,10 +19,29 @@ vim.api.nvim_create_user_command("Greplace", function(opts)
         return greplace.run(cmd, cmd_opts)
     end)
 end, {
-    desc     = "Grep the working tree into an editable buffer (! for regex)",
+    desc     = "Grep the working tree into an editable buffer",
     -- `nargs = "*"` rather than `"?"`: a query is one string that may well
     -- contain spaces, and it is read whole off `opts.args`.
     nargs    = "*",
-    bang     = true,
     complete = function() return {} end,
+})
+
+-- `:GreplaceEx` is the same search with the file set and the match rules
+-- opened up: `--filter '*.lua' --hidden -- query`. Flags first, written as a
+-- shell writes them, then a bare `--`, then the query verbatim -- the
+-- separator is what lets a query keep its own spaces, quotes and leading
+-- dashes, exactly as it does on `:Greplace`.
+vim.api.nvim_create_user_command("GreplaceEx", function(opts)
+    usercmd = usercmd or require("greplace.util.usercmd")
+    usercmd.handle(opts, function(cmd, _, cmd_opts)
+        greplace = greplace or require("greplace")
+        return greplace.run_ex(cmd, cmd_opts)
+    end)
+end, {
+    desc     = "Grep with ripgrep flags into an editable buffer (--flags -- query)",
+    nargs    = "*",
+    -- Only the flag section completes; past the bare `--` the words are a query.
+    complete = function(arglead, cmdline, cursor)
+        return require("greplace.rgflags").complete(arglead, cmdline, cursor)
+    end,
 })

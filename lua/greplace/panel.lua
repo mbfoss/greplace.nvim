@@ -39,8 +39,9 @@ local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
 ---query it was built from.
 ---@class greplace.PanelState
 ---@field query   string
----@field regex   boolean
 ---@field root    string
+---@field flags   table?   `:GreplaceEx` flags the search was run with, so
+---                        that re-running it means the same search
 ---@field entries table<integer, greplace.Entry>  keyed by anchor extmark id
 ---@field virt    table<integer, table[]>  each anchor's virtual text chunks
 ---@field hidden  table<integer, boolean>  anchors whose line has been removed
@@ -517,14 +518,14 @@ end
 
 --- Open the panel before there are any results, showing the query and that the
 --- search is running. `M.open` takes the same buffer over when it comes back.
----@param opts { query:string, regex:boolean?, root:string, height:integer, on_write:fun(bufnr:integer) }
+---@param opts { query:string, root:string, flags:table?, height:integer, on_write:fun(bufnr:integer) }
 ---@return integer bufnr
 function M.open_loading(opts)
     local bufnr   = M.find_buf() or create_buf(opts.on_write)
     _state[bufnr] = {
         query   = opts.query,
-        regex   = opts.regex or false,
         root    = opts.root,
+        flags   = opts.flags,
         entries = {},
         virt    = {},
         hidden  = {},
@@ -542,14 +543,14 @@ end
 
 --- Open (or reuse) the panel for a result set.
 ---@param matches  greplace.Match[]
----@param opts     { query:string, regex:boolean?, root:string, height:integer, truncated:boolean?, on_write:fun(bufnr:integer) }
+---@param opts     { query:string, root:string, flags:table?, height:integer, truncated:boolean?, on_write:fun(bufnr:integer) }
 ---@return integer bufnr
 function M.open(matches, opts)
     local bufnr = M.find_buf() or create_buf(opts.on_write)
     _state[bufnr] = {
-        query   = opts.query,
-        regex   = opts.regex or false,
-        root    = opts.root,
+        query     = opts.query,
+        root      = opts.root,
+        flags     = opts.flags,
         entries   = {},
         virt      = {},
         hidden    = {},

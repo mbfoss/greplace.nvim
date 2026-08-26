@@ -1,4 +1,4 @@
----@class keystone.util.SpawnHandle
+---@class greplace.util.SpawnHandle
 ---@field kill  fun()
 ---@field write fun(data: string?, on_done?: fun())
 ---@field get_write_queue_size fun():integer
@@ -6,7 +6,7 @@
 ---@param cmd      string[]
 ---@param opts     { cwd?: string, env: {string:string}?, stdin?: boolean, stdout?: fun(data:string), stderr?: fun(data:string) }
 ---@param on_exit  fun(code:integer)
----@return keystone.util.SpawnHandle?
+---@return greplace.util.SpawnHandle?
 local function spawn(cmd, opts, on_exit)
     -- stdin is opt-in: only commands that read from stdin (the rg `-` target)
     -- get a pipe, so others keep inheriting/ignoring stdin exactly as before.
@@ -99,7 +99,7 @@ local function spawn(cmd, opts, on_exit)
         end
     end)
 
-    ---@type keystone.util.SpawnHandle
+    ---@type greplace.util.SpawnHandle
     return {
         kill = function()
             -- close_pipes() stops read callbacks (no EOF will arrive), so set

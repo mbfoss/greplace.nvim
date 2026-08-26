@@ -116,10 +116,10 @@ describe(":Greplace", function()
         assert.are.same({ "alpha beta" }, panel_lines(bufnr))
     end)
 
-    it("treats the query as a regex with a bang", function()
-        write_file("a.txt", { "alpha beta", "alpha", "gamma" })
-        local bufnr = assert(run([[Greplace! ^alpha\s+\w+]]))
-        assert.are.same({ "alpha beta" }, panel_lines(bufnr))
+    it("takes the query literally, dashes and regex metacharacters included", function()
+        write_file("a.txt", { [[^alpha\s+ -- literal]], "alpha beta" })
+        local bufnr = assert(run([[Greplace ^alpha\s+ -- literal]]))
+        assert.are.same({ [[^alpha\s+ -- literal]] }, panel_lines(bufnr))
     end)
 
     it("re-runs the last query when given no query", function()
@@ -153,6 +153,112 @@ describe(":Greplace", function()
             if vim.api.nvim_win_get_buf(win) == bufnr then shown = true end
         end
         assert.is_true(shown)
+    end)
+
+    it("filters the file set with GreplaceEx's flags", function()
+        write_file("a.lua", { "hit lua" })
+        write_file("b.md", { "hit md" })
+        write_file(".hidden/c.lua", { "hit hidden" })
+
+        local bufnr = assert(run("GreplaceEx --filter '*.lua' --hidden -- hit"))
+        assert.are.same({ "hit hidden", "hit lua" }, panel_lines(bufnr))
+
+        assert.are.same({ "hit md" },
+            panel_lines(assert(run("GreplaceEx --type md -- hit"))))
+        -- An excluding glob, and the `.gitignore`-blind default: without
+        -- `hidden` the dotfile is out again.
+        assert.are.same({ "hit lua" },
+            panel_lines(assert(run("GreplaceEx --filter '*.lua' --filter '!b.*' -- hit"))))
+    end)
+
+    it("filters open buffers the same way, which rg cannot do itself", function()
+        -- The buffer pass feeds rg one nameless stdin stream, so `-g` has
+        -- nothing to filter there: unless greplace filters the buffer list
+        -- itself, an unsaved `.md` shows up in a `filter=*.lua` search.
+        write_file("a.lua", { "hit lua" })
+        write_file("b.md", { "nothing here" })
+        local mdbuf = assert(require("greplace.util").ensure_buf(_root .. "/b.md"))
+        vim.api.nvim_buf_set_lines(mdbuf, 0, -1, false, { "hit md, unsaved" })
+
+        assert.are.same({ "hit lua" },
+            panel_lines(assert(run("GreplaceEx --filter '*.lua' -- hit"))))
+        -- Unfiltered, that same unsaved line is found.
+        assert.are.same({ "hit lua", "hit md, unsaved" },
+            panel_lines(assert(run("GreplaceEx -- hit"))))
+    end)
+
+    it("takes the query after ` -- ` verbatim, and rejects a line without it", function()
+        write_file("a.txt", { "a -- b", "alpha" })
+        assert.are.same({ "a -- b" }, panel_lines(assert(run("GreplaceEx -- a -- b"))))
+
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("GreplaceEx alpha")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no query"))
+    end)
+
+    it("searches with regex and word flags from the flag line", function()
+        write_file("a.txt", { "hit", "hitter" })
+        assert.are.same({ "hit" }, panel_lines(assert(run("GreplaceEx --word -- hit"))))
+        assert.are.same({ "hitter" },
+            panel_lines(assert(run([[GreplaceEx --regex -- ^hit\w+$]]))))
+    end)
+
+    it("completes flag names and values, but not the query", function()
+        local rgflags = require("greplace.rgflags")
+        ---@param lead string
+        ---@param line string  the command line, cursor at its end -- where
+        ---                    `customlist` reports the whole line as written
+        ---                    behind the cursor, not one past it
+        local function complete(lead, line)
+            return rgflags.complete(lead, line, #line)
+        end
+
+        -- One space along from the command, with nothing typed yet: the
+        -- single space is all that separates the two, and it must survive.
+        assert.is_truthy(vim.tbl_contains(
+            vim.fn.getcompletion("GreplaceEx ", "cmdline"), "--hidden"))
+
+        -- A flag name, whether or not a leading `-` has been typed.
+        assert.are.same({ "--filter" }, complete("--fi", "GreplaceEx --fi"))
+        assert.is_truthy(vim.tbl_contains(complete("", "GreplaceEx "), "--hidden"))
+
+        -- A value: bare after `--type`, and carrying its flag back when glued.
+        assert.is_truthy(vim.tbl_contains(complete("lu", "GreplaceEx --type lu"), "lua"))
+        assert.are.same({ "--type=lua" }, complete("--type=lu", "GreplaceEx --type=lu"))
+
+        -- A switch already written is not offered again; a repeatable flag is.
+        local after = complete("--", "GreplaceEx --hidden --")
+        assert.is_false(vim.tbl_contains(after, "--hidden"))
+        assert.is_true(vim.tbl_contains(after, "--filter"))
+
+        -- Past the separator the words are a query, not a list.
+        assert.are.same({}, complete("h", "GreplaceEx -- h"))
+    end)
+
+    it("reports what is wrong with a flag line rather than searching", function()
+        local rgflags = require("greplace.rgflags")
+        ---@param raw string
+        ---@return string
+        local function err(raw)
+            local parsed, e = rgflags.parse(raw)
+            assert.is_nil(parsed)
+            return assert(e)
+        end
+
+        assert.is_truthy(err("--alpha"):match("no query"))
+        assert.is_truthy(err("--bogus -- hit"):match("unknown flag: %-%-bogus"))
+        assert.is_truthy(err("--regex=1 -- hit"):match("takes no value"))
+        assert.is_truthy(err("--filter -- hit"):match("needs a glob"))
+        assert.is_truthy(err("filter '*.lua' -- hit"):match("not a flag"))
+    end)
+
+    it("takes a flag value shell-style, quotes and all", function()
+        write_file("my src/a.txt", { "hit here" })
+        local bufnr = assert(run("GreplaceEx --dir 'my src' -- hit"))
+        assert.are.same({ "hit here" }, panel_lines(bufnr))
     end)
 
     it("loads edited files with their filetype set", function()

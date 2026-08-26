@@ -8,13 +8,17 @@ local M = {}
 -- `file:line` prefix is virtual), and writing the buffer pushes each edited
 -- line back to its source — in buffers, never to disk.
 --
---   Greplace[!] <query>   grep for <query> (`!` treats it as a regex)
---   Greplace               with no query: re-run the last one, discarding
---                          unapplied edits
+--   Greplace <query>          grep for <query>, literally
+--   Greplace                  with no query: re-run the last one, discarding
+--                             unapplied edits
+--   GreplaceEx <flags> -- <q> the same search with `greplace.rgflags`'s flags
+--                             (`--filter '*.lua' --hidden -- <q>`): a narrowed
+--                             file set, a regex, a case rule
 --
--- This module owns the command body, as `M.run`, plus the API it is a thin
--- skin over (`M.open`, `M.refresh`); the command itself is registered in
--- `plugin/greplace.lua`, and the work lives in `greplace.search` /
+-- This module owns both command bodies, as `M.run` and `M.run_ex`, plus the
+-- API they are a thin skin over (`M.open`, `M.refresh`); the commands
+-- themselves are registered in `plugin/greplace.lua`, and the work lives in
+-- `greplace.rgflags` / `greplace.search` /
 -- `greplace.panel` / `greplace.apply`.
 -- ---------------------------------------------------------------------------
 
@@ -66,8 +70,8 @@ local function on_write(bufnr)
 end
 
 ---@class greplace.OpenOpts
----@field regex boolean?  treat the query as a regex instead of a literal
 ---@field cwd   string?   search root (default: current directory)
+---@field flags table?    `:GreplaceEx` flags (see `greplace.rgflags`)
 
 --- Run a search and open the panel on its results.
 ---@param query string
@@ -81,7 +85,7 @@ function M.open(query, opts)
     -- is searching.
     local args = {
         query    = query,
-        regex    = opts.regex,
+        flags    = opts.flags,
         root     = root,
         height   = config.options.height,
         on_write = on_write,
@@ -101,7 +105,11 @@ function M.open(query, opts)
         callback = abort,
     })
 
-    _cancel = search.run(query, { cwd = root, regex = opts.regex, limit = config.options.limit },
+    _cancel = search.run(query, {
+            cwd   = root,
+            flags = opts.flags,
+            limit = config.options.limit,
+        },
         function(matches, err, truncated)
             _cancel = nil
             vim.schedule(function()
@@ -132,7 +140,7 @@ function M.refresh()
         _notify("no active search", vim.log.levels.WARN)
         return
     end
-    M.open(state.query, { regex = state.regex, cwd = state.root })
+    M.open(state.query, { cwd = state.root, flags = state.flags })
 end
 
 --- `:Greplace`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
@@ -150,8 +158,33 @@ function M.run(_cmd, opts)
     if query == "" then
         M.refresh()
     else
-        M.open(query, { regex = opts.bang })
+        M.open(query)
     end
+end
+
+--- `:GreplaceEx`'s implementation: the flags of `greplace.rgflags`, then a bare
+--- `--`, then the query verbatim. Same search and same panel as
+--- `:Greplace`; only the file set and the match rules are opened up.
+---@param _cmd string
+---@param opts vim.api.keyset.create_user_command.command_args
+function M.run_ex(_cmd, opts)
+    local raw = vim.trim(opts.args)
+    if raw == "" then
+        M.refresh()
+        return
+    end
+
+    local rgflags = require("greplace.rgflags")
+    local parsed, err = rgflags.parse(raw)
+    if not parsed then
+        _notify(assert(err), vim.log.levels.ERROR)
+        return
+    end
+    -- `dir` is the flag language's spelling of the search root.
+    M.open(parsed.query, {
+        flags = parsed.flags,
+        cwd   = parsed.flags.dir and vim.fn.expand(parsed.flags.dir) or nil,
+    })
 end
 
 ---@param opts greplace.Config?

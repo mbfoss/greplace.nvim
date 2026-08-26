@@ -2,6 +2,7 @@ local M = {}
 
 local util  = require("greplace.util")
 local spawn = require("greplace.util.spawn")
+local rgflags = require("greplace.rgflags")
 
 -- ---------------------------------------------------------------------------
 -- Search backend: one `rg --json` pass over the working tree, plus a second one
@@ -25,8 +26,9 @@ local spawn = require("greplace.util.spawn")
 
 ---@class greplace.SearchOpts
 ---@field cwd    string?  search root (default: current directory)
----@field regex  boolean? treat the query as a regex instead of a literal
 ---@field limit  integer? stop collecting after this many matches
+---@field flags  table?    `:GreplaceEx` flags (see `greplace.rgflags`): which
+---                        files are searched, and what counts as a match
 
 ---@class greplace.OpenBuf
 ---@field bufnr integer
@@ -88,24 +90,35 @@ end
 ---@param opts greplace.SearchOpts
 ---@return string[] args
 local function rg_base(opts)
-    local args = { "rg", "--json", "--no-heading", "--smart-case" }
-    if not opts.regex then
+    local args = { "rg", "--json", "--no-heading" }
+    -- Plain `:Greplace` is a literal, smart-case search and nothing else; a
+    -- regex, a case rule or anything else is asked for through `:GreplaceEx`'s
+    -- flags, which decide all of it themselves.
+    if opts.flags then
+        vim.list_extend(args, rgflags.match_args(opts.flags))
+    else
+        table.insert(args, "--smart-case")
         table.insert(args, "--fixed-strings")
     end
     return args
 end
 
---- Loaded, file-backed buffers under `root`, with their in-memory text.
+--- Loaded, file-backed buffers under `root`, with their in-memory text. A
+--- `keep` predicate over root-relative paths stands in for the file-selection
+--- flags, which rg cannot apply to this pass: it reads the buffers as one
+--- nameless stdin stream.
 ---@param root string
+---@param keep fun(relpath:string):boolean|nil
 ---@return greplace.OpenBuf[]
-function M.open_buffers(root)
+function M.open_buffers(root, keep)
     local out = {}
     for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].buftype == "" then
             local name = vim.api.nvim_buf_get_name(bufnr)
             if name ~= "" then
                 local path = util.resolve(name)
-                if M.relative_path(path, root) ~= path then
+                local rel = M.relative_path(path, root)
+                if rel ~= path and (not keep or keep(rel)) then
                     out[#out + 1] = {
                         bufnr = bufnr,
                         path  = path,
@@ -162,7 +175,7 @@ end
 ---@param stdin string?  text to feed rg's `-` target, if any
 ---@param sink  fun(m:greplace.Match)
 ---@param done  fun(err:string?)
----@return keystone.util.SpawnHandle?
+---@return greplace.util.SpawnHandle?
 local function rg_json(cmd, root, stdin, sink, done)
     local rest, errbuf = "", {}
 
@@ -227,7 +240,7 @@ function M.run(query, opts, callback)
     end
 
     local root  = M.resolve_root(opts.cwd)
-    local bufs  = M.open_buffers(root)
+    local bufs  = M.open_buffers(root, opts.flags and rgflags.buffer_filter(opts.flags))
     local open  = {} ---@type table<string, greplace.OpenBuf>
     for _, b in ipairs(bufs) do open[b.path] = b end
 
@@ -239,7 +252,7 @@ function M.run(query, opts, callback)
     local truncated = false
     local limit     = opts.limit
 
-    local handles = {} ---@type keystone.util.SpawnHandle[]
+    local handles = {} ---@type greplace.util.SpawnHandle[]
 
     --- Collect one match, and stop both rg processes once `limit` of them have
     --- arrived. Every sink checks `truncated` before calling in, so the list
@@ -280,6 +293,7 @@ function M.run(query, opts, callback)
 
     -- Disk pass.
     local dir_cmd = rg_base(opts)
+    if opts.flags then vim.list_extend(dir_cmd, rgflags.file_args(opts.flags)) end
     vim.list_extend(dir_cmd, { "--", query, "." })
     handles[#handles + 1] = rg_json(dir_cmd, root, nil, function(m)
         if not cancelled and not truncated and not open[m.path] then add(m) end
