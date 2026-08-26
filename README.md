@@ -5,7 +5,7 @@
 Project-wide search and replace by editing the grep results.
 
 ```
-:Greplace <query>
+:Gsearch <query>
 ```
 
 greps the working tree and collects every matching line into a split named
@@ -42,34 +42,55 @@ from being undone.
 }
 ```
 
-`setup()` is optional; the `:Greplace`, `:GreplaceEx` and `:GreplaceQf`
-commands register themselves, and nothing under `lua/greplace/` is loaded until one is first run.
+`setup()` is optional; the `:Gsearch` and `:Greplace` commands register
+themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 
 ## Usage
 
 | Command | Effect |
 | --- | --- |
-| `:Greplace foo bar` | literal search for `foo bar` (smart-case) |
-| `:Greplace` | with no query: cancel the search still running |
-| `:GreplaceQf` | fill the panel from the quickfix list instead of a search |
+| `:Gsearch foo bar` | literal search for `foo bar` (smart-case) |
+| `:Gsearch --hidden -- foo` | the same search with flags — see below |
+| `:Gsearch` | with nothing at all: cancel the search still running |
+| `:Greplace` | put the panel back on screen (`:Greplace open`) |
+| `:Greplace close` | take it off again, keeping the list in it |
+| `:Greplace toggle` | one or the other, whichever it is not |
+| `:Greplace qf` | fill the panel from the quickfix list instead of a search |
 
-Everything after `:Greplace` is the query, and it is always searched
+Two commands, split by what they do: `:Gsearch` is the one that produces a
+list, and `:Greplace` is what you do with the panel afterwards — so the panel's
+own verbs never have to compete with a query for the same argument.
+
+Everything after `:Gsearch` is the query, and it is always searched
 literally — quotes, backslashes and leading dashes included. It is read by
 Vim's own rules (`:h <f-args>`), so a run of whitespace inside the query is
 written `\ ` per space and a literal backslash `\\`; every other backslash,
 `\d` and `\s` among them, stands for itself. A regex, a case rule or a
-narrowed file set is asked for through `:GreplaceEx` below.
+narrowed file set is asked for with flags, below.
 
-### `:GreplaceEx` — searching with flags
+### `:Greplace` — the panel itself
 
-`:GreplaceEx` is the same search with the file set and the match rules opened
-up. Flags come first, then a bare `--`, then the query:
+`:Greplace` never searches. With no subcommand — or with `open` — it puts the
+panel back on screen with the list and any unapplied edits it was holding.
+`close` takes it off again and `toggle` does whichever of the two applies; both
+keep the buffer, so showing it again brings back the same list rather than
+searching for it again. `qf` refills it, below. The subcommands tab-complete,
+and there is nothing to show until a search has filled the panel once.
+
+### `:Gsearch --flags` — searching with flags
+
+A `:Gsearch` line that opens with `--` is a flag line: flags first, then a bare
+`--`, then the query.
 
 ```
-:GreplaceEx --filter *.lua --filter !*_spec.lua --hidden -- handle_event
-:GreplaceEx --type md --dir docs -- TODO
-:GreplaceEx --regex --word -- ^fn\s+\w+
+:Gsearch --filter *.lua --filter !*_spec.lua --hidden -- handle_event
+:Gsearch --type md --dir docs -- TODO
+:Gsearch --regex --word -- ^fn\s+\w+
 ```
+
+That is also how a query of its own that starts with `--` is written: put it
+after a bare separator, `:Gsearch -- --hidden`. Everything else is read as the
+query itself, with no separator needed.
 
 The whole line — flags and query alike — is split by Vim's own rules (`:h
 <f-args>`): unescaped whitespace separates words, `\ ` is a space inside one
@@ -81,10 +102,9 @@ is written `\ ` wherever it belongs to what you mean, in a flag value
 rather than given a list.
 
 The `--` is what ends the flags: nothing after the first bare one is read as
-one, so a query may hold leading dashes, quotes and another `--`. A line
-without it is an error rather than a guess at where the flags stopped;
-with no arguments at all, `:GreplaceEx` cancels the search still running, like
-`:Greplace`. Anything else that is wrong with the line — an unknown flag, a
+one, so a query may hold leading dashes, quotes and another `--`. A flag line
+without it is an error rather than a guess at where the flags stopped.
+Anything else that is wrong with the line — an unknown flag, a
 value flag left without one — is reported instead of searched.
 
 Flag names and values tab-complete: `--type` against `rg --type-list`, `--dir`
@@ -115,12 +135,11 @@ the buffer pass as one nameless stdin stream, so its own `-g` and `-t` cannot
 reach it, and without that a `--filter *.lua` search would quietly report
 matches from a `.md` you have open.
 
-### `:GreplaceQf` — editing the quickfix list
+### `:Greplace qf` — editing the quickfix list
 
-`:GreplaceQf` takes no arguments and runs no search: it fills the same panel
-from the quickfix list as it now stands, so whatever put entries there —
-`:grep`, `:vimgrep`, an LSP's references, a test runner — becomes an editable,
-writable list. Writing the buffer pushes the edits back exactly as it does for
+`:Greplace qf` runs no search: it fills the panel from the quickfix list
+as it now stands, so whatever put entries there — `:grep`, `:vimgrep`, an
+LSP's references, a test runner — becomes an editable, writable list. Writing the buffer pushes the edits back exactly as it does for
 a search.
 
 Only the file and line of each entry are used. The entry's own text is

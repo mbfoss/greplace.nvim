@@ -27,7 +27,7 @@ local rgflags = require("greplace.rgflags")
 ---@class greplace.SearchOpts
 ---@field cwd    string?  search root (default: current directory)
 ---@field limit  integer? stop collecting after this many matches
----@field flags  table?    `:GreplaceEx` flags (see `greplace.rgflags`): which
+---@field flags  table?    `:Gsearch` flags (see `greplace.rgflags`): which
 ---                        files are searched, and what counts as a match
 
 ---@class greplace.OpenBuf
@@ -92,7 +92,7 @@ end
 local function rg_base(opts)
     local args = { "rg", "--json", "--no-heading" }
     -- Plain `:Greplace` is a literal, smart-case search and nothing else; a
-    -- regex, a case rule or anything else is asked for through `:GreplaceEx`'s
+    -- regex, a case rule or anything else is asked for through `:Gsearch`'s
     -- flags, which decide all of it themselves.
     if opts.flags then
         vim.list_extend(args, rgflags.match_args(opts.flags))

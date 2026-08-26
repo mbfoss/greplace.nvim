@@ -6,9 +6,9 @@ local search = require("greplace.search")
 -- ---------------------------------------------------------------------------
 -- The quickfix list as a match list.
 --
--- `:GreplaceQf` fills the panel from whatever put entries in the quickfix list
--- -- `:grep`, `:vimgrep`, an LSP's references, a test runner -- so the same
--- editing and write-back works on a list greplace did not produce.
+-- `:Greplace qf` fills the panel from whatever put entries in the
+-- quickfix list -- `:grep`, `:vimgrep`, an LSP's references, a test runner --
+-- so the same editing and write-back works on a list greplace did not produce.
 --
 -- The entry's own `text` is not used. The panel's contract is that a shown
 -- line is the source line byte for byte, and a quickfix `text` is whatever the

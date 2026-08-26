@@ -3,23 +3,33 @@ local M = {}
 -- ---------------------------------------------------------------------------
 -- greplace
 --
--- `:Greplace <query>` greps the working tree and collects every matching line
+-- `:Gsearch <query>` greps the working tree and collects every matching line
 -- into a `greplace://replace` split. The lines are plain, editable text (the
 -- `file:line` prefix is virtual), and writing the buffer pushes each edited
 -- line back to its source — in buffers, never to disk.
 --
---   Greplace <query>          grep for <query>, literally
---   Greplace                  with no query: cancel the search in flight
---   GreplaceEx <flags> -- <q> the same search with `greplace.rgflags`'s flags
+--   Gsearch <query>           grep for <query>, literally
+--   Gsearch <flags> -- <q>    the same search with `greplace.rgflags`'s flags
 --                             (`--filter *.lua --hidden -- <q>`): a narrowed
---                             file set, a regex, a case rule
---   GreplaceQf                the same panel over the quickfix list, whatever
---                             filled it, instead of a search of its own
+--                             file set, a regex, a case rule. A line starting
+--                             with `--` is a flag line, so a query that starts
+--                             with one is written after a bare `--`
+--   Gsearch                   with nothing at all: cancel the search in flight
 --
--- This module owns the command bodies, as `M.run`, `M.run_ex` and `M.run_qf`,
--- plus the API they are a thin skin over (`M.open`, `M.open_qf`, `M.cancel`,
--- `M.refresh`); the commands themselves are registered in
--- `plugin/greplace.lua`, and the work lives in `greplace.rgflags` /
+--   Greplace [open]           put the panel back on screen
+--   Greplace close            take it off again, keeping the list in it
+--   Greplace toggle           one or the other, whichever it is not
+--   Greplace qf               fill the panel from the quickfix list, whatever
+--                             filled that, instead of from a search
+--
+-- The split is deliberate: `:Gsearch` is the one that produces a list, and
+-- `:Greplace` is what you do with the panel afterwards, so the panel's own
+-- verbs never have to compete with a query for the same argument.
+--
+-- This module owns both command bodies, as `M.run_search` and `M.run`, plus
+-- the API they are a thin skin over (`M.open`, `M.open_qf`, `M.show`,
+-- `M.toggle`, `M.cancel`, `M.refresh`); the commands themselves are registered
+-- in `plugin/greplace.lua`, and the work lives in `greplace.rgflags` /
 -- `greplace.search` / `greplace.qflist` / `greplace.panel` / `greplace.apply`.
 -- ---------------------------------------------------------------------------
 
@@ -72,7 +82,7 @@ end
 
 ---@class greplace.OpenOpts
 ---@field cwd   string?   search root (default: current directory)
----@field flags table?    `:GreplaceEx` flags (see `greplace.rgflags`)
+---@field flags table?    `:Gsearch` flags (see `greplace.rgflags`)
 
 --- Run a search and open the panel on its results.
 ---@param query string
@@ -98,7 +108,7 @@ function M.open(query, opts)
 
     -- Wiping the panel ends the search that was filling it. The augroup is
     -- cleared per search, so the buffer never accumulates one autocommand per
-    -- `:Greplace` (it is reused across them).
+    -- `:Gsearch` (it is reused across them).
     vim.api.nvim_create_autocmd("BufWipeout", {
         group    = vim.api.nvim_create_augroup("greplace.search", { clear = true }),
         buffer   = bufnr,
@@ -162,6 +172,35 @@ function M.open_qf()
     end
 end
 
+--- Put the panel back on screen, with whatever list and unapplied edits it
+--- was holding when it was last taken off. There is nothing to show until a
+--- search or a quickfix list has filled it once.
+---@return integer? bufnr  nil when there is no panel to show
+function M.show()
+    local bufnr = panel.find_buf()
+    if not bufnr then
+        _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
+        return
+    end
+    panel.show(bufnr, config.options.height)
+    return bufnr
+end
+
+--- Take the panel off screen, keeping the buffer -- so the list and any edits
+--- in it are still there next time it is shown. Silent when it was not on
+--- screen to begin with: that is the state that was asked for either way.
+function M.hide()
+    local bufnr = panel.find_buf()
+    if bufnr then panel.close(bufnr) end
+end
+
+--- Show the panel, or hide it when it is already on screen.
+function M.toggle()
+    local bufnr = panel.find_buf()
+    if bufnr and panel.close(bufnr) then return end
+    M.show()
+end
+
 --- Stop the search in flight, leaving the panel showing that it was stopped
 --- rather than the query it will never finish. Nothing is re-run: a search
 --- that is taking too long is stopped so that a narrower one can be typed.
@@ -180,9 +219,9 @@ function M.cancel()
 end
 
 --- Rebuild the panel from what it was opened on, discarding unapplied edits:
---- the query for a search, the quickfix list as it now stands for `:GreplaceQf`.
---- Not what a bare `:Greplace` does -- that cancels; this is for a mapping
---- that wants the list brought up to date with the files underneath it.
+--- the query for a search, the quickfix list as it now stands for one filled
+--- by `:Greplace qf`. No command runs this -- it is for a mapping that
+--- wants the list brought up to date with the files underneath it.
 function M.refresh()
     local bufnr = panel.find_buf()
     local state = bufnr and panel.state(bufnr)
@@ -197,46 +236,35 @@ function M.refresh()
     end
 end
 
---- `:Greplace`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
+--- `:Gsearch`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
 --- so that `plugin/greplace.lua` can register the command without this module
 --- being loaded: it hands `util/usercmd` a wrapper that requires us on the
 --- first invocation.
 ---
---- The query is one string, so the words Neovim split off the command line are
---- joined back into one with the single space that separated them. That makes
---- `:h <f-args>` the rule for the query too: a space that belongs to the query
---- is written `\ `, `\\` is a backslash, and every other backslash -- `\d`,
---- `\s` -- reaches rg as written. With no words at all -- not with a blank
---- query, which `:Greplace \ ` is a legitimate way to write -- cancel the
---- search in flight.
+--- A line that opens with `--` is a flag line, read by `greplace.rgflags`;
+--- anything else is the query itself, taken literally. Either way the words
+--- are Neovim's split of the line, joined back with the single space that
+--- separated them, so `:h <f-args>` is the rule throughout: a space that
+--- belongs to the query is written `\ `, `\\` is a backslash, and every other
+--- backslash -- `\d`, `\s` -- reaches rg as written.
+---
+--- With no words at all -- not with a blank query, which `:Gsearch \ ` is a
+--- legitimate way to write -- cancel the search in flight.
 ---@param _cmd string
 ---@param fargs string[]  the argument line, as Neovim split it
 ---@param _opts vim.api.keyset.create_user_command.command_args
-function M.run(_cmd, fargs, _opts)
-    if #fargs == 0 then
-        M.cancel()
-    else
-        M.open(table.concat(fargs, " "))
-    end
-end
-
---- `:GreplaceEx`'s implementation: the flags of `greplace.rgflags`, then a bare
---- `--`, then the query. Same search and same panel as `:Greplace`; only the
---- file set and the match rules are opened up. Unlike `:Greplace`, which takes
---- its query as the untouched command line, this one reads the whole line from
---- Neovim's split, so a space anywhere in it -- in a flag value or in the
---- query -- is written `\ ` (`:h <f-args>`).
----@param _cmd string
----@param fargs string[]  the argument line, as Neovim split it
----@param _opts vim.api.keyset.create_user_command.command_args
-function M.run_ex(_cmd, fargs, _opts)
+function M.run_search(_cmd, fargs, _opts)
     if #fargs == 0 then
         M.cancel()
         return
     end
 
-    local rgflags = require("greplace.rgflags")
-    local parsed, err = rgflags.parse(fargs)
+    if not vim.startswith(fargs[1], "--") then
+        M.open(table.concat(fargs, " "))
+        return
+    end
+
+    local parsed, err = require("greplace.rgflags").parse(fargs)
     if not parsed then
         _notify(assert(err), vim.log.levels.ERROR)
         return
@@ -248,17 +276,31 @@ function M.run_ex(_cmd, fargs, _opts)
     })
 end
 
---- `:GreplaceQf`'s implementation. It takes no arguments: the quickfix list is
---- the whole input.
+--- The subcommands of `:Greplace`, in the order they are offered.
+---@type string[]
+M.SUBCOMMANDS = { "open", "close", "toggle", "qf" }
+
+--- `:Greplace`'s implementation: what to do with the panel, `open` by default.
+--- It never searches, so it needs no query and takes none.
 ---@param _cmd string
 ---@param fargs string[]  the argument line, as Neovim split it
 ---@param _opts vim.api.keyset.create_user_command.command_args
-function M.run_qf(_cmd, fargs, _opts)
-    if #fargs > 0 then
-        _notify("GreplaceQf takes no arguments", vim.log.levels.ERROR)
-        return
+function M.run(_cmd, fargs, _opts)
+    local sub = fargs[1] or "open"
+    if #fargs > 1 then
+        _notify(("%s takes no argument"):format(sub), vim.log.levels.ERROR)
+    elseif sub == "open" then
+        M.show()
+    elseif sub == "close" then
+        M.hide()
+    elseif sub == "toggle" then
+        M.toggle()
+    elseif sub == "qf" then
+        M.open_qf()
+    else
+        _notify(("unknown subcommand: %s (%s)")
+            :format(sub, table.concat(M.SUBCOMMANDS, ", ")), vim.log.levels.ERROR)
     end
-    M.open_qf()
 end
 
 ---@param opts greplace.Config?

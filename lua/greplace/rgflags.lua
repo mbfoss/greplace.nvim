@@ -1,7 +1,7 @@
 local M = {}
 
 -- ---------------------------------------------------------------------------
--- `:GreplaceEx`'s flags: the schema, what each one means to ripgrep, and the
+-- `:Gsearch`'s flags: the schema, what each one means to ripgrep, and the
 -- part of it that ripgrep cannot be told at all.
 --
 -- The search runs twice -- once over the working tree, once over the
@@ -235,7 +235,7 @@ function M.buffer_filter(flags)
     end
 end
 
---- Read a `:GreplaceEx` command line: the flags up to the first bare `--`,
+--- Read a `:Gsearch` flag line: the flags up to the first bare `--`,
 --- then the query. The whole line is read from the split Neovim already did
 --- for us, flags and query alike, so one escaping rule covers both -- the one
 --- `:h <f-args>` states: words break on whitespace, `\ ` is a space inside a
@@ -257,7 +257,8 @@ function M.parse(fargs)
         end
     end
     if not sep then
-        return nil, "no query: write the flags, then `--`, then the query"
+        return nil, "no query: write the flags, then `--`, then the query "
+            .. "(a query of its own that starts with `--` goes after a bare one)"
     end
 
     -- Nothing past the separator is the empty query. Whitespace past it is
@@ -368,6 +369,11 @@ end
 ---@return string[]
 function M.complete(arglead, cmdline, cursor)
     return usercmd.complete(arglead, cmdline:sub(1, cursor), function(_, rest, lead)
+        -- A line that did not open with `--` is a query being typed, not a
+        -- flag line; nothing in it completes. (With nothing settled yet the
+        -- flags are still offered: that is the one moment the line could go
+        -- either way, and a query is not made worse by candidates it ignores.)
+        if rest[1] and not vim.startswith(rest[1], "--") then return {} end
         if vim.tbl_contains(rest, "--") then return {} end
 
         -- A value glued to its flag, `--type=lu`.

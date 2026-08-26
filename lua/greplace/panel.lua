@@ -40,7 +40,7 @@ local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
 ---@class greplace.PanelState
 ---@field query   string
 ---@field root    string
----@field flags   table?   `:GreplaceEx` flags the search was run with, so
+---@field flags   table?   `:Gsearch` flags the search was run with, so
 ---                        that re-running it means the same search
 ---@field entries table<integer, greplace.Entry>  keyed by anchor extmark id
 ---@field virt    table<integer, table[]>  each anchor's virtual text chunks
@@ -393,6 +393,43 @@ local function show(bufnr, height)
     -- The panel keeps its window: <CR> (and anything else that opens a file)
     -- must land in a regular window rather than covering the results.
     vim.wo[0][0].winfixbuf      = true
+end
+
+--- The window showing the panel in the current tabpage, if it has one.
+---@param bufnr integer
+---@return integer? win
+function M.win(bufnr)
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if vim.api.nvim_win_get_buf(win) == bufnr then return win end
+    end
+end
+
+--- Put the panel back on screen (or move the cursor into it, if it is already
+--- there), leaving its contents -- unapplied edits included -- as they are.
+---@param bufnr  integer
+---@param height integer
+function M.show(bufnr, height)
+    show(bufnr, height)
+end
+
+--- Take the panel off screen -- every window showing it in this tabpage, so
+--- that "off screen" is what it means even after the panel window was split.
+--- The buffer stays (`bufhidden = "hide"`), so the list and any edits in it
+--- survive until it is shown again.
+---@param bufnr integer
+---@return boolean closed  false if it was not on screen to begin with
+function M.close(bufnr)
+    local closed = false
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        -- The last window of a tabpage cannot be closed; leaving it be is a
+        -- better answer than the error `nvim_win_close` would raise.
+        if vim.api.nvim_win_get_buf(win) == bufnr
+            and #vim.api.nvim_tabpage_list_wins(0) > 1 then
+            vim.api.nvim_win_close(win, false)
+            closed = true
+        end
+    end
+    return closed
 end
 
 --- Width of the `file:line` column: the widest location in the list, but never
