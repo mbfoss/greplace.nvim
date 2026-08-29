@@ -230,8 +230,10 @@ require("greplace").setup({
 make test
 ```
 
-Tests use [plenary.nvim](https://github.com/nvim-lua/plenary.nvim); set
-`NVIM_PLENARY_DIR` to reuse an existing clone.
+Tests use [busted](https://lunarmodules.github.io/busted/), run through
+[nlua](https://github.com/mfussenegger/nlua) so each spec executes inside a
+real Neovim. `make test` installs both into a project-local `.luarocks/` tree
+on first use; `make clean-deps` removes it.
 
 ## License
 

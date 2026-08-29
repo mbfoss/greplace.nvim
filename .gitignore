@@ -47,3 +47,4 @@ luac.out
 .luarc.json
 .ezdap.json
 CLAUDE.md
+/.luarocks

@@ -1,31 +1,29 @@
-local plenary_dir = os.getenv("NVIM_PLENARY_DIR") or "/tmp/plenary.nvim"
+-- Busted helper: loaded once, inside Neovim, before any spec runs.
+--
+-- `make test` drives busted through nlua, so the specs get a real Neovim (and
+-- with it the `vim` API) rather than a bare Lua interpreter.
 
--- Presence of the directory is not enough: an interrupted or partial clone
--- leaves a directory whose `plugin/plenary.vim` is missing, so
--- `PlenaryBustedDirectory` never gets defined and the run hangs/errors. Key the
--- decision off that plugin file, and wipe a broken tree before re-cloning.
-local plugin_file = plenary_dir .. "/plugin/plenary.vim"
-if vim.fn.filereadable(plugin_file) == 0 then
-  if vim.fn.isdirectory(plenary_dir) == 1 then
-    print("removing incomplete plenary clone at " .. plenary_dir)
-    vim.fn.delete(plenary_dir, "rf")
-  end
-  print("cloning plenary into " .. plenary_dir)
-  local out = vim.fn.system({
-    "git", "clone", "--depth", "1",
-    "https://github.com/nvim-lua/plenary.nvim", plenary_dir,
-  })
-  if vim.v.shell_error ~= 0 or vim.fn.filereadable(plugin_file) == 0 then
-    error("failed to clone plenary into " .. plenary_dir .. "\n" .. out)
-  end
+-- Absolute paths throughout: the specs `chdir` into temporary directories, so
+-- a relative runtimepath or `package.path` entry would stop resolving mid-run.
+local root = vim.uv.cwd()
+
+vim.opt.runtimepath:prepend(root)
+package.path = table.concat({
+    root .. "/lua/?.lua",
+    root .. "/lua/?/init.lua",
+    package.path,
+}, ";")
+
+-- nlua starts Neovim with `-u NONE`, which also means "no plugin scripts and
+-- no filetype detection". Put back the parts of an ordinary session the specs
+-- assume: this plugin's own commands and autocmds, and `:filetype on` (a file
+-- loaded by the panel is expected to arrive with its filetype set).
+vim.cmd("filetype plugin indent on")
+for _, file in ipairs(vim.fn.glob(root .. "/plugin/**/*.{lua,vim}", false, true)) do
+    vim.cmd.source(file)
 end
 
 -- Tests must not see the developer's own editing history: a real shada file
 -- carries global marks (`'A`-`'Z`, `'0`-`'9`) that the marks picker would list
 -- alongside the ones a test sets.
 vim.opt.shadafile = "NONE"
-
-vim.opt.rtp:append(".")
-vim.opt.rtp:append(plenary_dir)
-
-vim.cmd("runtime plugin/plenary.vim")
