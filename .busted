@@ -1,7 +1,7 @@
 return {
     _all = {
         -- Run the specs inside Neovim, so `vim.api` & friends are available.
-        lua = "nlua",
+        lua = "./tests/nvim-lua",
     },
     default = {
         ROOT = { "tests" },

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Lua interpreter shim for busted, in place of the nlua rock.
+#
+# busted re-executes itself under the interpreter named by `lua` in `.busted`,
+# as `<interpreter> <busted script> <args...>`. Running that through `nvim -l`
+# means every spec executes inside a real Neovim and can use the `vim` API.
+#
+# The flags give a bare editor -- no user config, no shada, no viminfo -- which
+# is what `tests/init.lua` then builds the test environment on top of.
+exec "${NVIM:-nvim}" -u NONE -U NONE -N -i NONE -l "$@"

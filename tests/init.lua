@@ -1,7 +1,7 @@
 -- Busted helper: loaded once, inside Neovim, before any spec runs.
 --
--- `make test` drives busted through nlua, so the specs get a real Neovim (and
--- with it the `vim` API) rather than a bare Lua interpreter.
+-- busted runs under `tests/nvim-lua` (see `.busted`), so the specs get a real
+-- Neovim (and with it the `vim` API) rather than a bare Lua interpreter.
 
 -- Absolute paths throughout: the specs `chdir` into temporary directories, so
 -- a relative runtimepath or `package.path` entry would stop resolving mid-run.
@@ -14,7 +14,7 @@ package.path = table.concat({
     package.path,
 }, ";")
 
--- nlua starts Neovim with `-u NONE`, which also means "no plugin scripts and
+-- The shim starts Neovim with `-u NONE`, which also means "no plugin scripts and
 -- no filetype detection". Put back the parts of an ordinary session the specs
 -- assume: this plugin's own commands and autocmds, and `:filetype on` (a file
 -- loaded by the panel is expected to arrive with its filetype set).

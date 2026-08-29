@@ -231,9 +231,10 @@ make test
 ```
 
 Tests use [busted](https://lunarmodules.github.io/busted/), run through
-[nlua](https://github.com/mfussenegger/nlua) so each spec executes inside a
-real Neovim. `make test` installs both into a project-local `.luarocks/` tree
-on first use; `make clean-deps` removes it.
+[`tests/nvim-lua`](tests/nvim-lua) so each spec executes inside a real Neovim.
+busted must already be installed for Lua 5.1 — the version Neovim embeds —
+with `luarocks --lua-version=5.1 --local install busted`; `make test` fails if
+it is missing rather than installing anything.
 
 ## License
 
