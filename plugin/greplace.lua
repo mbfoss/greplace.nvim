@@ -1,0 +1,74 @@
+if vim.fn.has("nvim-0.11") ~= 1 then
+    vim.api.nvim_echo({{"greplace.nvim requires Neovim >= 0.11: disabled", "Error"}}, true, {})
+    return
+end
+
+-- The two commands are registered here at startup without requiring any Lua:
+-- the callbacks pull in what they need on first use. `greplace` is the plugin
+-- proper, the search, the panel and the write-back, and `util/usercmd` is the
+-- completion plumbing behind `:Greplace`. Neither is read until a command is
+-- first run, and both are cached in a local on first use, so a callback pays
+-- for a `require` lookup once rather than on every invocation. Each body runs
+-- its work under `pcall`, so an error in it is reported as a notification
+-- rather than as a stack trace.
+local usercmd ---@type table?
+local greplace ---@type table?
+
+-- `:Gsearch` is the one that searches: a query taken literally, or a flag
+-- line, `--glob *.lua --hidden -- query`.
+vim.api.nvim_create_user_command("Gsearch", function(opts)
+    greplace = greplace or require("greplace")
+    -- nargs="*" always yields fargs; the fallback is only to satisfy its
+    -- optional type.
+    local ok, err = pcall(greplace.run_search, opts.name, opts.fargs or {}, opts)
+    if not ok then
+        vim.notify(
+            "[greplace.nvim] " .. opts.name .. " command error\n" .. tostring(err),
+            vim.log.levels.ERROR
+        )
+    end
+end, {
+    desc     = "Grep the working tree into an editable buffer (--flags -- query)",
+    -- `nargs = "*"` so an empty line can be told from a query; the body reads
+    -- the query raw from `opts.args`.
+    nargs    = "*",
+    -- `:'<,'>Gsearch` searches for the selection; the body reads the range.
+    range    = true,
+    -- Only a flag line completes, and only its flag section: a query is not a
+    -- list of anything, and past a bare `--` neither is the rest of the line.
+    complete = function(arglead, cmdline, cursor)
+        return require("greplace.rgflags").complete(arglead, cmdline, cursor)
+    end,
+})
+
+-- `:Greplace` is what to do with the panel the search filled: put it back on
+-- screen, take it off again, or fill it from the quickfix list instead --
+-- `:grep`, `:vimgrep`, an LSP's references, anything that fills that list.
+vim.api.nvim_create_user_command("Greplace", function(opts)
+    greplace = greplace or require("greplace")
+    -- As above: `nargs="*"` always yields fargs, and a body that throws is
+    -- reported rather than left as a stack trace.
+    local ok, err = pcall(greplace.run, opts.name, opts.fargs or {}, opts)
+    if not ok then
+        vim.notify(
+            "[greplace.nvim] " .. opts.name .. " command error\n" .. tostring(err),
+            vim.log.levels.ERROR
+        )
+    end
+end, {
+    desc     = "The greplace panel: open, toggle, refresh, diff, or fill from the quickfix list",
+    -- `nargs = "*"` rather than `"?"`: a second word is reported by the body
+    -- as the error it is, rather than by Neovim as a bare "Too many arguments".
+    nargs    = "*",
+    -- `:Greplace! refresh` discards unapplied edits rather than keeping them.
+    bang     = true,
+    complete = function(arglead, cmdline, cursor)
+        usercmd = usercmd or require("greplace.util.usercmd")
+        return usercmd.complete(arglead, cmdline:sub(1, cursor), function(_, rest)
+            -- One subcommand and no arguments: nothing to offer behind it.
+            if #rest > 0 then return {} end
+            greplace = greplace or require("greplace")
+            return greplace.SUBCOMMANDS
+        end)
+    end,
+})

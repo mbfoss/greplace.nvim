@@ -1,0 +1,52 @@
+# Narrow a search with :Gsearch flags, then drop a result so the write leaves
+# that source line alone.
+size 100x33
+cwd $GREPLACE_DEMO_WORK
+init ../init.lua
+out ../out/02-flags.gif
+cast ../out/02-flags.cast
+
+font-family SauceCodePro NF
+font-dir ~/Library/Fonts
+font-size 17
+line-height 1.19
+theme nord
+fps 20
+idle-time-limit 2
+last-frame-duration 2
+
+keycast on
+keycast-width 24
+
+caption Flags narrow the search  ·  --type lua --word
+sleep 500ms
+type :Gsearch --type lua --word load_config
+key <CR>
+wait 7 lines \(0 changed\)
+sleep 1000ms
+
+caption Deleting a result leaves its source line alone
+key G
+sleep 300ms
+key dd
+wait 6 lines \(0 changed\)
+sleep 900ms
+
+caption Replace the rest, then write them all at once
+type :%s/load_config/read_config/g
+key <CR>
+wait \([1-9][0-9]* changed\)
+sleep 800ms
+key :w<CR>
+wait \(0 changed\)
+sleep 900ms
+
+caption The deleted result was left untouched
+key <C-w>k
+sleep 300ms
+type :edit tests/config_spec.lua
+key <CR>
+sleep 500ms
+type /load_config
+key <CR>
+sleep 1200ms

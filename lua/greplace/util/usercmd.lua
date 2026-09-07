@@ -1,0 +1,72 @@
+local M = {}
+
+-- This module does no argument parsing of its own. Dispatch passes Neovim's
+-- opts.fargs straight through, and completion runs the raw command line back
+-- through nvim_parse_cmd, so both paths split by Vim's native rules
+-- (:h <f-args>):
+--
+--   Arguments are separated by unescaped whitespace. A backslash escapes the
+--   character after it: \<space> (or \<tab>) is that literal whitespace and
+--   does not split the argument, \\ is a single backslash, and a backslash
+--   before anything else -- including a trailing backslash at end of line --
+--   is kept verbatim along with what follows it. Quotes are not special.
+--
+--     a\ b c   -> a b  and  c        a\\b     -> a\b
+--     a\\\ b   -> a\ b               a\nb     -> a\nb
+--     \ a      -> " a"               a\       -> a\
+--     "a b"    -> "a  and  b"        --p=x\ y -> --p=x y
+--
+---@alias greplace.usercmd.subcommand fun(cmd:string,rest:string[],arg_lead:string):string[]
+
+--- Escape `name` for one `<f-args>`-split argument. Only backslash and
+--- whitespace are special; escaping more (as `fnameescape()` does) corrupts it.
+---@param name string
+---@return string
+function M.escape_arg(name)
+    return (name:gsub("\\", "\\\\"):gsub("[ \t]", { [" "] = "\\ ", ["\t"] = "\\\t" }))
+end
+
+--- Filename completion for a command argument. `getcompletion()` finds nothing
+--- for a pattern ending in escaped whitespace ("a\ "), so spell it literally;
+--- matches come back unescaped, so escape them again for the command line.
+---@param arg_lead string
+---@param type string e.g. "file", "dir"
+---@return string[]
+function M.complete_filename(arg_lead, type)
+    local pattern = arg_lead:gsub("\\([ \t])", "%1")
+    return vim.tbl_map(M.escape_arg, vim.fn.getcompletion(pattern, type))
+end
+
+--- Completion for a `nargs = "*"` command, called from inside the `complete`
+--- callback so the module and its `subcommand` load only on first completion.
+---@param arg_lead string
+---@param cmd_line string
+---@param subcommand greplace.usercmd.subcommand
+---@return string[]
+function M.complete(arg_lead, cmd_line, subcommand)
+    local function filter(strs)
+        local out = {}
+        for _, s in ipairs(strs or {}) do
+            if vim.startswith(s, arg_lead) then
+                table.insert(out, s)
+            end
+        end
+        return out
+    end
+
+    -- nvim_parse_cmd splits exactly as <f-args> does, and strips any range or
+    -- command modifiers. It throws on a command line it cannot parse.
+    local ok, parsed = pcall(vim.api.nvim_parse_cmd, cmd_line, {})
+    if not ok then return {} end
+
+    -- A non-empty `arg_lead` is the word being completed, so drop the last
+    -- parsed argument; empty means a new argument has begun.
+    local rest = parsed.args or {}
+    if arg_lead ~= "" then
+        rest[#rest] = nil
+    end
+
+    return filter(subcommand(parsed.cmd, rest, arg_lead))
+end
+
+return M

@@ -1,0 +1,49 @@
+# The headline demo: search the tree, edit the result list like ordinary text,
+# and write every changed line back to its source buffer.
+size 100x33
+cwd $GREPLACE_DEMO_WORK
+init ../init.lua
+out ../out/01-replace.gif
+cast ../out/01-replace.cast
+
+font-family SauceCodePro NF
+font-dir ~/Library/Fonts
+font-size 17
+line-height 1.19
+theme nord
+fps 20
+idle-time-limit 2
+last-frame-duration 2
+
+keycast on
+keycast-width 24
+
+caption Search the tree  ·  greplace.nvim
+sleep 500ms
+type :Gsearch load_config
+key <CR>
+wait [0-9]+ files \([0-9]+ changed\)
+sleep 1000ms
+
+caption Edit the results as ordinary text
+sleep 600ms
+type :%s/load_config/read_config/g
+key <CR>
+wait \([1-9][0-9]* changed\)
+sleep 1200ms
+
+caption :w writes each line back to its source buffer
+sleep 500ms
+key :w<CR>
+wait \(0 changed\)
+sleep 900ms
+
+caption Changed in memory -- nothing on disk yet
+key <C-w>k
+sleep 300ms
+type :edit src/config.lua
+key <CR>
+sleep 500ms
+type /read_config
+key <CR>
+sleep 1200ms

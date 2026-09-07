@@ -1,0 +1,42 @@
+# Search for the visual selection, then use K to see where a match lives.
+size 100x33
+cwd $GREPLACE_DEMO_WORK
+init ../init.lua
+out ../out/03-selection.gif
+cast ../out/03-selection.cast
+
+font-family SauceCodePro NF
+font-dir ~/Library/Fonts
+font-size 17
+line-height 1.19
+theme nord
+fps 20
+idle-time-limit 2
+last-frame-duration 2
+
+keycast on
+keycast-width 24
+
+caption Search for what is selected
+sleep 500ms
+type :edit src/server.lua
+key <CR>
+sleep 400ms
+type /load_config
+key <CR>
+sleep 500ms
+key viw
+sleep 400ms
+key :
+type Gsearch
+key <CR>
+wait [0-9]+ files \([0-9]+ changed\)
+sleep 1000ms
+
+caption K shows the full path and line
+key gg
+sleep 300ms
+key K
+sleep 1400ms
+key j
+sleep 900ms
