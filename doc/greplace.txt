@@ -1,0 +1,410 @@
+*greplace*                                Search and replace in multiple files
+
+==============================================================================
+Table of Contents                                 *greplace-table-of-contents*
+
+1. Installation                                        |greplace-installation|
+2. Usage                                                      |greplace-usage|
+  - :Greplace: the panel                                      |greplace-panel|
+  - :'<,'>Gsearch: searching for the selection                                 |greplace-selection|
+  - :Gsearch --flags: searching                               |greplace-flags|
+  - :Greplace qf: quickfix import                                |greplace-qf|
+  - Mappings                                                |greplace-keymaps|
+  - Editing rules                                           |greplace-editing|
+3. Configuration                                      |greplace-configuration|
+4. Health                                                    |greplace-health|
+5. Highlight groups                                      |greplace-highlights|
+
+  WORK IN PROGRESS
+Project-wide search and replace by editing the grep results.
+
+>
+    :Gsearch <query>
+<
+
+greps the working tree and collects every matching line into a split named
+`greplace://greplace-matches`. Each line is the matched line itself: plain,
+editable text. The `file:line` shown in front of it is _virtual_: it is not
+part of the line, it cannot be typed over, and it is what tells the plugin
+where the line came from.
+
+Edit the lines however you like (`:%s/…`, visual block, macros, by hand) and
+write the buffer:
+
+>
+    :w
+<
+
+Every changed line is written back to its source **in memory**: files already
+open keep their buffer, files that are not open are loaded into one. Nothing is
+written to disk, so the whole change is one `:wa` away, or one `u` per buffer
+from being undone.
+
+
+  **Requires Neovim ≥ 0.11** and ripgrep
+  <https://github.com/BurntSushi/ripgrep> on `$PATH`. No plugin dependencies.
+
+==============================================================================
+1. Installation                                        *greplace-installation*
+
+**lazy.nvim**
+
+>lua
+    {
+      "mbfoss/greplace.nvim",
+      config = function()
+        require("greplace").setup()
+      end,
+    }
+<
+
+`setup()` is optional; the `:Gsearch` and `:Greplace` commands register
+themselves, and nothing under `lua/greplace/` is loaded until one is first run.
+
+
+==============================================================================
+2. Usage                                                      *greplace-usage*
+
+  -----------------------------------------------------------------------
+  Command                             Effect
+  ----------------------------------- -----------------------------------
+  :Gsearch foo bar                    literal search for foo bar
+                                      (smart-case)
+
+  :Gsearch --hidden -- foo            the same search with flags; see
+                                      below
+
+  :Gsearch                            with nothing at all: cancel the
+                                      search still running
+
+  :'<,'>Gsearch                       search for the visual selection;
+                                      see below
+
+  :Greplace                           put the panel back on screen
+                                      (:Greplace open)
+
+  :Greplace close                     take it off again, keeping the list
+                                      in it
+
+  :Greplace toggle                    one or the other, whichever it is
+                                      not
+
+  :Greplace qf                        fill the panel from the quickfix
+                                      list instead of a search
+
+  :Greplace refresh                   run the list’s search again (!
+                                      discards unapplied edits)
+
+  :Greplace diff                      preview what writing the panel
+                                      would change, as a diff
+
+  :Greplace apply                     apply the panel’s edits, as :w in
+                                      it does
+  -----------------------------------------------------------------------
+Two commands, split by what they do: `:Gsearch` is the one that produces a
+list, and `:Greplace` is what you do with the panel afterwards, so the
+panel’s own verbs never have to compete with a query for the same argument.
+
+Everything after `:Gsearch` is the query, and it is always searched literally:
+quotes, backslashes and leading dashes included. It is read by Vim’s own
+rules (|<f-args>|), so a run of whitespace inside the query is written `\` per
+space and a literal backslash `\\`; every other backslash, `\d` and `\s` among
+them, stands for itself. A regex, a case rule or a narrowed file set is asked
+for with flags, below.
+
+
+:GREPLACE: THE PANEL                                          *greplace-panel*
+
+`:Greplace` never searches. With no subcommand, or with `open`, it puts the
+panel back on screen with the list and any unapplied edits it was holding.
+`close` takes it off again and `toggle` does whichever of the two applies; both
+keep the buffer, so showing it again brings back the same list rather than
+searching for it again. `qf` refills it, below. The subcommands tab-complete,
+and there is nothing to show until a search has filled the panel once.
+
+`refresh` runs the list’s search again, with the same query, flags and root,
+so the panel catches up with files changed since; a list from `:Greplace qf` is
+refilled from the quickfix list as it now stands. A panel holding unapplied
+edits is left alone, since the fresh list would drop them: write them first, or
+use `:Greplace! refresh` to discard them.
+
+`diff` shows what `:w` would do before it does it: every file with an edited
+match, as a unified diff of its text now against its text after the write, on a
+tab of its own; `q` closes it. It is worked out on copies, so nothing is
+applied and no file is loaded into a buffer to find out. A file that is open is
+diffed from its buffer, unsaved changes included, since that is what a write
+lands on. An edit the write would skip, because its source line has changed
+since the search, is listed at the top instead of in the diff.
+
+`apply` is `:w` in the panel, from wherever you are: from the preview once it
+looks right, or with the panel closed. Either one closes the preview, which is
+out of date once the edits have landed.
+
+
+:'<,'>GSEARCH: SEARCHING FOR THE SELECTION                                 *greplace-selection*
+
+Given a range, `:Gsearch` takes its query from the buffer rather than the
+command line. Select text and press `:`, which fills in `'<,'>`, and the
+selected text is searched for literally, exactly as selected: no `\` to type,
+no backslash to double. With a linewise selection, or a range typed by hand
+(`:.Gsearch`, `:12Gsearch`), the query is that whole line with its indentation
+and trailing blanks trimmed.
+
+The range must stay on one line: ripgrep matches line by line, so a query
+spanning a line break could never match. Flags may follow, and the selection
+becomes their query, so `--` is optional and nothing may come after it:
+
+>
+    :'<,'>Gsearch --type lua --word
+<
+
+A mapping makes it one key:
+
+>lua
+    vim.keymap.set("x", "<leader>s", ":Gsearch<CR>", { desc = "greplace: search selection" })
+<
+
+
+:GSEARCH --FLAGS: SEARCHING                                   *greplace-flags*
+
+A `:Gsearch` line that opens with `--` is a flag line: flags first, then a bare
+`--`, then the query.
+
+>
+    :Gsearch --glob *.lua --glob !*_spec.lua --hidden -- handle_event
+    :Gsearch --type md --dir docs -- TODO
+    :Gsearch --regex --word -- ^fn\s+\w+
+<
+
+That is also how a query of its own that starts with `--` is written: put it
+after a bare separator, `:Gsearch -- --hidden`. Everything else is read as the
+query itself, with no separator needed.
+
+The whole line, flags and query alike, is split by Vim’s own rules
+(|<f-args>|): unescaped whitespace separates words, `\` is a space inside one
+and `\\` a backslash, and every other backslash stands for itself. So a space
+is written `\` wherever it belongs to what you mean, in a flag value (`--dir
+my\ src`) or in the query (`-- two\ words`), while a regex keeps its `\s` and
+`\w` untouched. Quotes are not special. Flags are written `--switch`, `--key
+value` or `--key=value`, and a repeatable flag is repeated rather than given a
+list.
+
+The `--` is what ends the flags: nothing after the first bare one is read as
+one, so a query may hold leading dashes, quotes and another `--`. A flag line
+without it is an error rather than a guess at where the flags stopped. Anything
+else that is wrong with the line, such as an unknown flag or a value flag left
+without one, is reported instead of searched.
+
+Flag names and values tab-complete: `--type` against `rg --type-list`, `--dir`
+against directories, whether the value is written after the flag or glued to it
+with `=`. A switch already on the line drops out of the candidates, the `--`
+separator is offered with them, and past it nothing completes at all: those
+words are a query, not a list.
+
+  -----------------------------------------------------------------------
+  Flag                                Effect
+  ----------------------------------- -----------------------------------
+  --dir <path>                        search root (default: the working
+                                      directory)
+
+  --glob <glob>                       glob filter, repeatable: *.txt,
+                                      !*.lua, **/dir/**
+
+  --iglob <glob>                      the same, matched regardless of
+                                      case
+
+  --type <name>                       rg file type, repeatable: lua,
+                                      rust, !md (see rg --type-list)
+
+  --max-depth <n>                     maximum directory depth to descend
+
+  --regex                             treat the query as a regex
+
+  --case / --nocase                   case-sensitive / -insensitive
+                                      (default: smart case)
+
+  --word / --line                     match whole words / whole lines
+                                      only
+
+  --invert                            collect the lines that do not match
+
+  --hidden                            include hidden files (dotfiles)
+
+  --no-ignore                         ignore .gitignore / .ignore rules
+
+  --follow                            follow symlinks
+  -----------------------------------------------------------------------
+There is no passthrough of raw ripgrep arguments, by design: the panel’s
+whole contract is that a shown line is the source line byte for byte, and
+`--replace`, `--only-matching`, `-l`, `--count` and `-A/-B/-C` all break it.
+
+File-selection flags are also applied to open buffers, in-process, since
+ripgrep sees the buffer pass as one nameless stdin stream, so its own `-g` and
+`-t` cannot reach it, and without that a `--glob *.lua` search would quietly
+report matches from a `.md` you have open.
+
+`--glob` and `--iglob` are ripgrep’s own two spellings and mean what they do
+there: `--glob *.lua` leaves out a file named `A.LUA`, `--iglob *.lua` takes it
+in. Both passes agree on that: the in-process globs are compiled to match the
+case rule the flag names, so a file is never filtered one way on disk and the
+other way in a buffer.
+
+
+:GREPLACE QF: QUICKFIX IMPORT                                    *greplace-qf*
+
+`:Greplace qf` runs no search: it fills the panel from the quickfix list as it
+now stands, so whatever put entries there (`:grep`, `:vimgrep`, an LSP’s
+references, a test runner) becomes an editable, writable list. Writing the
+buffer pushes the edits back exactly as it does for a search.
+
+Only the file and line of each entry are used. The entry’s own text is
+ignored (`:vimgrep` trims it, an LSP replaces it with a message) and the line
+is read back from the file, or from its buffer when it has one, so what the
+panel shows is the text a replacement will land on. Entries with no file, no
+line number, or a line that can no longer be read are skipped, with a note
+saying how many. Several entries on one line are listed once: the panel edits
+lines, and offering the same line twice would apply the edit twice.
+
+The panel opens as soon as the search is triggered and says that it is
+searching until the results replace it.
+
+Files that are open in a buffer with unsaved changes are searched from that
+text rather than from disk, so the matches are the ones a write would land on.
+A location is marked with `≡` whenever its file is open in a buffer, saved or
+not.
+
+
+MAPPINGS                                                    *greplace-keymaps*
+
+  -----------------------------------------------------------------------
+  Key                                 Effect
+  ----------------------------------- -----------------------------------
+  <CR>                                open the source of the line under
+                                      the cursor, at that line and
+                                      column, keeping the cursor in the
+                                      panel
+
+  K                                   show the match under the cursor in
+                                      a floating window: its full path,
+                                      relative path, line number, whether
+                                      it is already loaded in a buffer,
+                                      and the source line as the panel
+                                      rendered it
+
+  ]c                                  move to the next edited line
+
+  [c                                  move to the previous edited line
+  -----------------------------------------------------------------------
+The file opens in a regular window: the panel keeps its own, and is never
+opened over. The cursor stays in the panel, so `j<CR>` steps through the
+matches one after another. Set `keys.open` or `keys.hover` to a different key,
+or to `false`, to change or drop either mapping.
+
+`]c` and `[c` step through the lines marked `•`, as they do in a diff, and
+take a count: `3]c` moves three edits along, and a count larger than the edits
+left stops at the last one rather than going nowhere. Each is a jump, so `''`
+and `<C-o>` come back. They are fixed, not configurable: they belong to the
+panel’s buffer alone, and nothing else is bound to them there.
+
+The `file:line` column is capped at `path_width` display cells; a longer
+location is cropped on the left, keeping the file name and line number visible.
+`K` is how you see the whole path.
+
+
+EDITING RULES                                               *greplace-editing*
+
+The anchor in front of a line owns everything from that line down to the next
+anchor, which makes the obvious edits mean the obvious thing:
+
+- **change the line** → the source line is rewritten
+- **delete the line** (`dd`) → that match is dropped: its source line is left
+    exactly as it is
+- **add a line** (`o`, a linewise `p`, `<CR>` mid-line, `:s/x/\r/`) → the line
+    is taken out again, with a warning
+- **join two lines** (`J`, a charwise delete across a line break, `<BS>` at the
+    start of a line) → they are split back apart, with a warning
+- **empty the panel** (`ggdG`) → nothing is changed at all
+
+Deleting lines is how you narrow a result set down to the matches you actually
+want to replace; it never removes anything from a file. The dropped line’s
+`file:line` disappears with it, so the locations left in the panel keep lining
+up with the lines they belong to, and `u` brings both back.
+
+A match is one source line and stays one line in the panel. A line that was
+added is taken out again, and lines that were joined are split back apart, so
+every match has its own line back; the cursor stays where the break was, and in
+Insert mode you stay in Insert mode. It is the line break that comes back, not
+the text: what a change deleted along with it – the characters a charwise
+delete across the break took, say – stays deleted, and `u` brings it back.
+The space `J` inserts goes with the join, so joining and splitting again leaves
+the lines as they were.
+
+An edited line is marked with a `•` in front of its `│`.
+
+A line whose source has moved since the search (an edit elsewhere, a reload) is
+left untouched and reported as skipped. After a write the panel re-renders with
+the applied text and corrected line numbers.
+
+
+==============================================================================
+3. Configuration                                      *greplace-configuration*
+
+>lua
+    require("greplace").setup({
+      height     = 15,    -- height of the result split
+      limit      = 10000, -- maximum matches collected per search; a search that
+                          -- hits it says so in the winbar
+      winbar     = true,  -- show the panel's counts in a winbar
+      path_width = 60,    -- greatest width of the `file:line` column, in cells
+      keys = {
+        open  = "<CR>", -- open the source of the line under the cursor
+        hover = "K",    -- show the full details of the match under the cursor
+      },
+    })
+<
+
+
+==============================================================================
+4. Health                                                    *greplace-health*
+
+>vim
+    :checkhealth greplace
+<
+
+Reports ripgrep, the commands and the options that differ from the defaults.
+ripgrep is the search itself, so its absence is an error rather than a note –
+without it `:Gsearch` has nothing to run. An option name greplace does not
+define is reported as a warning: `setup()` merges the table you pass wholesale,
+so a misspelled one would otherwise be accepted in silence.
+
+
+==============================================================================
+5. Highlight groups                                      *greplace-highlights*
+
+  -------------------------------------------------------------------------
+  Group                     Default                 Meaning
+  ------------------------- ----------------------- -----------------------
+  GreplaceLocation          Directory               file:line of a match
+
+  GreplaceBufferIndicator   Special                 the ≡ in front of a
+                                                    match from an open
+                                                    buffer
+
+  GreplaceSeparator         NonText                 the │ between location
+                                                    and text
+
+  GreplaceStatus            Comment                 the winbar’s counts and
+                                                    the panel’s status text
+
+  GreplaceMatch             Label                   the matched text itself
+
+  GreplaceLimit             WarningMsg              the winbar’s “limit of
+                                                    N reached” note
+
+  GreplaceChanged           Changed                 the • in front of the │
+                                                    of an edited line
+  -------------------------------------------------------------------------
+
+Generated by panvimdoc <https://github.com/kdheepak/panvimdoc>
+
+vim:tw=78:ts=8:noet:ft=help:norl:

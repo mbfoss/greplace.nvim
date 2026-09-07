@@ -1,0 +1,704 @@
+local apply   = require("greplace.apply")
+local panel   = require("greplace.panel")
+local search  = require("greplace.search")
+local greplace = require("greplace")
+
+local _root
+
+---@param rel   string
+---@param lines string[]
+---@return string abs path
+local function write_file(rel, lines)
+    local path = _root .. "/" .. rel
+    vim.fn.mkdir(vim.fs.dirname(path), "p")
+    vim.fn.writefile(lines, path)
+    -- `expand_env = false`, as the plugin resolves paths: a `$NAME` in one is
+    -- part of the file's name and not something to look up in the environment.
+    return vim.fs.normalize(path, { expand_env = false })
+end
+
+---@param query string
+---@param opts  greplace.SearchOpts?
+---@return greplace.Match[]
+local function run_search(query, opts)
+    local result, done
+    opts = vim.tbl_extend("keep", opts or {}, { cwd = _root })
+    search.run(query, opts, function(matches, err)
+        result, done = matches or { err = err }, true
+    end)
+    assert.is_true(vim.wait(5000, function() return done end, 20))
+    return result
+end
+
+---@param path string
+---@return string[]
+local function buf_lines(path)
+    local bufnr = assert(require("greplace.util").find_buf(path), "no buffer for " .. path)
+    return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+end
+
+--- The `file:line` chunk of an anchor's virtual text, found past the buffer
+--- indicator column that precedes it when a match came from an open buffer.
+---@param virt table[]
+---@return table
+local function location_chunk(virt)
+    for _, chunk in ipairs(virt) do
+        if chunk[2]:match("Location$") then return chunk end
+    end
+    error("no location chunk in " .. vim.inspect(virt))
+end
+
+--- The indicator an anchor draws in front of its location, trimmed, or `nil`
+--- when the panel has no indicator column.
+---@param virt table[]
+---@return string?
+local function indicator(virt)
+    for _, chunk in ipairs(virt) do
+        if chunk[2]:match("Indicator$") then return vim.trim(chunk[1]) end
+    end
+end
+
+--- The location each anchor is currently drawing, in buffer order, with a
+--- deleted line's anchor showing as `false`.
+---@param bufnr integer
+---@return (string|boolean)[]
+local function locations(bufnr)
+    local ns    = vim.api.nvim_get_namespaces()["greplace.anchor"]
+    local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+    local out   = {}
+    for i, mark in ipairs(marks) do
+        -- An anchor whose line was removed is invalid, and draws nothing.
+        local virt = not mark[4].invalid and mark[4].virt_text
+        out[i] = virt and location_chunk(virt)[1] or false
+    end
+    return out
+end
+
+--- Delete panel row `row` (0-indexed) as `dd` would, and let the deferred
+--- redraw of the anchors run.
+---@param bufnr integer
+---@param row   integer
+local function delete_row(bufnr, row)
+    vim.api.nvim_buf_set_lines(bufnr, row, row + 1, false, {})
+    vim.wait(100, function() return false end)
+end
+
+--- Rewrite one panel row the way a user editing it would: an in-line change,
+--- not a line-wise delete-and-insert (which would collapse the anchors).
+---
+--- Any line past the first grows the match's region, which only `apply` can
+--- still be shown here: the panel itself joins such a row back up as soon as
+--- its watch runs. They go in before the row's own text is replaced, and as an
+--- insert past the end of it: replacing text from column 0 carries the anchor
+--- (which has right gravity) along with it, and it would end up on the last of
+--- the new rows rather than on the match's own.
+---@param bufnr integer
+---@param row   integer 0-indexed
+---@param lines string[]
+local function edit_row(bufnr, row, lines)
+    local old = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+    if #lines > 1 then
+        local tail = vim.list_slice(lines, 2)
+        table.insert(tail, 1, "")
+        vim.api.nvim_buf_set_text(bufnr, row, #old, row, #old, tail)
+    end
+    vim.api.nvim_buf_set_text(bufnr, row, 0, row, #old, { lines[1] })
+end
+
+describe("greplace", function()
+    before_each(function()
+        local tmp = vim.fn.tempname()
+        vim.fn.mkdir(tmp, "p")
+        _root = require("greplace.util").resolve(tmp)
+        vim.fn.chdir(_root)
+    end)
+
+    after_each(function()
+        vim.cmd("silent! %bwipeout!")
+        vim.fn.delete(_root, "rf")
+    end)
+
+    it("collects matches from disk", function()
+        write_file("a.txt", { "keep", "hit one", "hit two" })
+        local matches = run_search("hit")
+        assert.equals(2, #matches)
+        assert.equals("a.txt", matches[1].relpath)
+        assert.equals(2, matches[1].lnum)
+        assert.equals("hit one", matches[1].text)
+        assert.is_nil(matches[1].bufnr)
+    end)
+
+    it("does not expand a `$NAME` in a path against the environment", function()
+        -- `vim.fs.normalize` does so by default, which turned a directory
+        -- really called `$HOME` into the home directory: a path that does not
+        -- exist, so the panel listed it and then could not write it back.
+        local path = write_file("$HOME/a.txt", { "hit here" })
+
+        local matches = run_search("hit")
+        assert.equals(1, #matches)
+        assert.equals("$HOME/a.txt", matches[1].relpath)
+        assert.equals(path, matches[1].path)
+        assert.equals(1, vim.fn.filereadable(matches[1].path))
+
+        local pbuf = panel.open(matches, {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        edit_row(pbuf, 0, { "HIT here" })
+        local result = apply.run(panel.regions(pbuf))
+        assert.equals(1, result.replaced)
+        assert.equals(0, result.skipped)
+        assert.same({ "HIT here" }, buf_lines(path))
+    end)
+
+    it("stops collecting once the match limit is reached", function()
+        local lines = {}
+        for i = 1, 500 do lines[i] = "hit " .. i end
+        write_file("big.txt", lines)
+        local matches = run_search("hit", { limit = 5 })
+        assert.equals(5, #matches)
+    end)
+
+    it("searches unsaved buffer text instead of the file on disk", function()
+        local path  = write_file("a.txt", { "old line" })
+        local bufnr = assert(require("greplace.util").ensure_buf(path))
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "nothing", "hit here" })
+
+        local matches = run_search("hit")
+        assert.equals(1, #matches)
+        assert.equals(2, matches[1].lnum)
+        assert.equals("hit here", matches[1].text)
+        assert.equals(bufnr, matches[1].bufnr)
+
+        assert.equals(0, #run_search("old line"))
+    end)
+
+    it("renders matched lines verbatim, location as virtual text", function()
+        write_file("a.txt", { "    hit one" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        assert.same({ "    hit one" }, vim.api.nvim_buf_get_lines(pbuf, 0, -1, false))
+
+        local ns    = vim.api.nvim_get_namespaces()["greplace.anchor"]
+        local marks = vim.api.nvim_buf_get_extmarks(pbuf, ns, 0, -1, { details = true })
+        assert.equals(1, #marks)
+        assert.equals("a.txt:1", marks[1][4].virt_text[1][1])
+        assert.is_nil(indicator(marks[1][4].virt_text))
+        assert.is_false(vim.bo[pbuf].modified)
+    end)
+
+    it("marks matches from loaded buffers with an indicator", function()
+        write_file("a.txt", { "hit disk" })
+        local b = write_file("b.txt", { "hit loaded" })
+        local c = write_file("c.txt", { "hit old" })
+        assert(require("greplace.util").ensure_buf(b))
+        local cbuf = assert(require("greplace.util").ensure_buf(c))
+        -- Unsaved changes make no difference to the indicator.
+        vim.api.nvim_buf_set_lines(cbuf, 0, -1, false, { "hit modified" })
+
+        local pbuf  = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        local ns    = vim.api.nvim_get_namespaces()["greplace.anchor"]
+        local marks = vim.api.nvim_buf_get_extmarks(pbuf, ns, 0, -1, { details = true })
+        local got   = {}
+        for _, mark in ipairs(marks) do
+            local virt = mark[4].virt_text
+            got[location_chunk(virt)[1]] = indicator(virt)
+        end
+        assert.same({ ["a.txt:1"] = "", ["b.txt:1"] = "≡", ["c.txt:1"] = "≡" }, got)
+
+        -- Every row reserves the same width, so the locations stay aligned.
+        local widths = {}
+        for _, mark in ipairs(marks) do
+            widths[#widths + 1] = vim.fn.strdisplaywidth(mark[4].virt_text[1][1])
+        end
+        assert.same({ 2, 2, 2 }, widths)
+
+        -- The winbar does not count them: which files are open changes after
+        -- the search, and the count would go stale.
+        local winbar = vim.wo[vim.fn.bufwinid(pbuf)].winbar
+        assert.is_nil(winbar:find("open", 1, true))
+    end)
+
+    it("applies edits to buffers without touching disk", function()
+        local a = write_file("a.txt", { "hit one", "plain" })
+        local b = write_file("sub/b.txt", { "x", "hit two" })
+
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        edit_row(pbuf, 0, { "HIT one" })
+        edit_row(pbuf, 1, { "HIT two" })
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.equals(2, result.replaced)
+        assert.equals(2, result.files)
+        assert.equals(0, result.skipped)
+
+        assert.same({ "HIT one", "plain" }, buf_lines(a))
+        assert.same({ "x", "HIT two" }, buf_lines(b))
+        -- Nothing was written out.
+        assert.same({ "hit one", "plain" }, vim.fn.readfile(a))
+        assert.same({ "x", "hit two" }, vim.fn.readfile(b))
+    end)
+
+    it("skips a file whose load raises, and applies the rest", function()
+        -- A load can fail for reasons no check up front catches -- a swap
+        -- file, `E37` under `'nohidden'`. Raising would abandon the apply
+        -- part-way, with the files already done edited and the panel stale.
+        local a = write_file("a.txt", { "hit one" })
+        local b = write_file("b.txt", { "hit two" })
+
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        edit_row(pbuf, 0, { "HIT one" })
+        edit_row(pbuf, 1, { "HIT two" })
+
+        local util = require("greplace.util")
+        local real = util.ensure_buf
+        util.ensure_buf = function(path, bufs)
+            if path == a then error("E325: ATTENTION, swap file found") end
+            return real(path, bufs)
+        end
+        local ok, result = pcall(apply.run, panel.regions(pbuf))
+        util.ensure_buf = real
+
+        assert.is_true(ok, "apply raised: " .. tostring(result))
+        assert.equals(1, result.replaced)
+        assert.equals(1, result.skipped)
+        assert.same({ "HIT two" }, buf_lines(b))
+    end)
+
+    it("loads only the files that have an edited line", function()
+        local a = write_file("a.txt", { "hit one", "hit two" })
+        local b = write_file("b.txt", { "hit three" })
+        local c = write_file("c.txt", { "hit four" })
+        local util = require("greplace.util")
+
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        -- a.txt is edited, b.txt only has its match deleted, c.txt is untouched.
+        edit_row(pbuf, 0, { "HIT one" })
+        delete_row(pbuf, 2)
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.equals(1, result.replaced)
+        assert.equals(1, result.files)
+        assert.equals(1, result.removed)
+        assert.same({ "HIT one", "hit two" }, buf_lines(a))
+        assert.is_nil(util.find_buf(b))
+        assert.is_nil(util.find_buf(c))
+        -- The untouched matches stay listed as they were.
+        assert.equals(3, #result.entries)
+        assert.equals("hit four", result.entries[3].text)
+    end)
+
+    it("splits a source line when a region grows", function()
+        local a = write_file("a.txt", { "one hit", "tail" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        edit_row(pbuf, 0, { "first", "second" })
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.equals(1, result.replaced)
+        assert.same({ "first", "second", "tail" }, buf_lines(a))
+    end)
+
+    it("leaves the source alone for a match deleted from the panel", function()
+        local a = write_file("a.txt", { "hit one", "hit two", "tail" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        -- Drop the first result line; its anchor collapses onto the second.
+        vim.api.nvim_buf_set_lines(pbuf, 0, 1, false, {})
+        edit_row(pbuf, 0, { "HIT two" })
+
+        local result = apply.run(panel.regions(pbuf))
+        -- The first match is untouched, and only the second was rewritten.
+        assert.same({ "hit one", "HIT two", "tail" }, buf_lines(a))
+        assert.equals(1, result.replaced)
+        assert.equals(1, result.removed)
+        -- The dropped match is off the list rather than back on the redraw.
+        assert.equals(1, #result.entries)
+        assert.equals(2, result.entries[1].lnum)
+        assert.equals("HIT two", result.entries[1].text)
+    end)
+
+    it("drops the location of a removed line, leaving the rest in place", function()
+        write_file("a.txt", { "hit one", "hit two", "hit three" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        assert.same({ "a.txt:1", "a.txt:2", "a.txt:3" }, locations(pbuf))
+
+        delete_row(pbuf, 1)
+        -- The middle anchor collapsed onto the last line; only the line that
+        -- is really there still shows its location.
+        assert.same({ "a.txt:1", false, "a.txt:3" }, locations(pbuf))
+
+        delete_row(pbuf, 0)
+        assert.same({ false, false, "a.txt:3" }, locations(pbuf))
+    end)
+
+    it("leaves the last source line alone when the last panel line goes", function()
+        local a = write_file("a.txt", { "hit one", "hit two" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        delete_row(pbuf, 1)
+        assert.same({ "a.txt:1", false }, locations(pbuf))
+
+        local result = apply.run(panel.regions(pbuf))
+        -- Nothing to write, so the file was not even loaded.
+        assert.is_nil(require("greplace.util").find_buf(a))
+        assert.same({ "hit one", "hit two" }, vim.fn.readfile(a))
+        assert.equals(1, result.removed)
+    end)
+
+    it("changes nothing when the panel is emptied", function()
+        local a = write_file("a.txt", { "hit one", "keep", "hit two" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        -- `ggdG` leaves one empty line behind, which means "drop every match",
+        -- not "blank out the last one".
+        vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, {})
+        vim.wait(100, function() return false end)
+        assert.same({ false, false }, locations(pbuf))
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.is_nil(require("greplace.util").find_buf(a))
+        assert.same({ "hit one", "keep", "hit two" }, vim.fn.readfile(a))
+        assert.equals(0, result.replaced)
+        assert.equals(2, result.removed)
+        assert.equals(0, #result.entries)
+    end)
+
+    it("keeps line numbers right when an edit sits below a dropped match", function()
+        local a = write_file("a.txt", { "hit one", "mid", "hit two" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        -- Drop the first match, split the second: nothing was removed from the
+        -- file, so the second match's line number must not shift up.
+        delete_row(pbuf, 0)
+        edit_row(pbuf, 0, { "A", "B" })
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.same({ "hit one", "mid", "A", "B" }, buf_lines(a))
+        assert.equals(1, #result.entries)
+        assert.equals(3, result.entries[1].lnum)
+    end)
+
+    it("keeps later line numbers correct after a region grows", function()
+        local a = write_file("a.txt", { "hit one", "mid", "hit two" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        edit_row(pbuf, 0, { "A", "B" })
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.same({ "A", "B", "mid", "hit two" }, buf_lines(a))
+        assert.equals(4, result.entries[2].lnum)
+        assert.equals("hit two", result.entries[2].text)
+    end)
+
+    it("skips a region whose source line moved underneath it", function()
+        local a = write_file("a.txt", { "hit one" })
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        local abuf = assert(require("greplace.util").ensure_buf(a))
+        vim.api.nvim_buf_set_lines(abuf, 0, -1, false, { "someone else edited this" })
+        edit_row(pbuf, 0, { "HIT one" })
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.equals(0, result.replaced)
+        assert.equals(1, result.skipped)
+        assert.same({ "someone else edited this" }, buf_lines(a))
+    end)
+
+    it("reuses the panel buffer across searches", function()
+        write_file("a.txt", { "hit one" })
+        local first = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        local second = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        assert.equals(first, second)
+    end)
+
+    it("counts files, lines and changes for the winbar", function()
+        write_file("a.txt", { "hit one", "hit two" })
+        write_file("b.txt", { "hit three" })
+        local bufnr = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        assert.same({ files = 2, lines = 3, changes = 0 }, panel.stats(bufnr))
+
+        -- An edited line is one change. The counts follow an edit once the
+        -- deferred redraw has run.
+        edit_row(bufnr, 0, { "HIT one" })
+        vim.wait(100, function() return false end)
+        assert.same({ files = 2, lines = 3, changes = 1 }, panel.stats(bufnr))
+
+        edit_row(bufnr, 1, { "HIT two" })
+        vim.wait(100, function() return false end)
+        assert.same({ files = 2, lines = 3, changes = 2 }, panel.stats(bufnr))
+
+        -- A removed line leaves every count, and takes its file with it when it
+        -- was that file's last match.
+        delete_row(bufnr, 2)
+        assert.same({ files = 1, lines = 2, changes = 2 }, panel.stats(bufnr))
+    end)
+
+    it("draws the counts in the panel's winbar", function()
+        write_file("a.txt", { "hit one" })
+        greplace.open("hit")
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            return next(panel.state(bufnr).entries) ~= nil
+        end, 20))
+
+        local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        assert.is_truthy(winbar:find("1 file  1 line  0 changes", 1, true))
+        assert.is_nil(winbar:find("hit", 1, true))
+        assert.is_nil(winbar:find("open", 1, true))
+    end)
+
+    it("says so in the winbar when the match limit cut the list short", function()
+        local lines = {}
+        for i = 1, 20 do lines[i] = "hit " .. i end
+        write_file("big.txt", lines)
+        require("greplace.config").setup({ limit = 5 })
+
+        greplace.open("hit")
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            return next(panel.state(bufnr).entries) ~= nil
+        end, 20))
+
+        local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        assert.is_truthy(winbar:find("limit of 5 reached", 1, true))
+
+        -- Removing a line takes the list below the limit, and the note with
+        -- it; putting the line back brings the note back.
+        local function limit_shown()
+            return vim.wo[vim.fn.bufwinid(bufnr)].winbar:find("limit of", 1, true) ~= nil
+        end
+        vim.api.nvim_buf_call(bufnr, function() vim.cmd("normal! ggdd") end)
+        assert.is_true(vim.wait(1000, function() return not limit_shown() end, 10))
+        vim.api.nvim_buf_call(bufnr, function() vim.cmd("undo") end)
+        assert.is_true(vim.wait(1000, limit_shown, 10))
+
+        -- A search that fits says nothing about a limit.
+        require("greplace.config").setup({ limit = 10000 })
+        greplace.open("hit 1")
+        assert.is_true(vim.wait(5000, function()
+            local st = panel.state(bufnr)
+            return st ~= nil and not st.truncated and next(st.entries) ~= nil
+        end, 20))
+        winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        assert.is_nil(winbar:find("limit", 1, true))
+    end)
+
+    it("reports nothing once the search has been cancelled", function()
+        write_file("a.txt", { "hit one" })
+        local fired = false
+        local cancel = search.run("hit", { cwd = _root }, function() fired = true end)
+        assert.is_function(cancel)
+        cancel()
+        -- Long enough for both rg processes to have exited and drained.
+        vim.wait(500, function() return fired end, 20)
+        assert.is_false(fired)
+        -- Cancelling twice, and after the fact, is a no-op.
+        cancel()
+    end)
+
+    it("leaves the panel showing the newest query when searches overlap", function()
+        write_file("a.txt", { "alpha here" })
+        write_file("b.txt", { "bravo here" })
+
+        greplace.open("alpha")
+        greplace.open("bravo")
+
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)[1] ~= ""
+        end, 20))
+
+        assert.same({ "bravo here" }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+        assert.equals("bravo", panel.state(bufnr).query)
+    end)
+
+    it("draws a `%` in a message as itself, not as a winbar item", function()
+        -- The message carries a query the user typed, and a winbar reads `%f`
+        -- as the file name and `%{...}` as a Vim expression to evaluate.
+        greplace.open("%f%{getcwd()}zz")
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            local st = panel.state(bufnr)
+            return st ~= nil and st.message ~= nil
+        end, 20))
+
+        local winid  = vim.fn.bufwinid(bufnr)
+        local drawn  = vim.api.nvim_eval_statusline(vim.wo[winid].winbar,
+            { winid = winid }).str
+        assert.is_truthy(drawn:find("%f%{getcwd()}zz", 1, true))
+    end)
+
+    it("reports a search root it could not run rg in", function()
+        -- A process that never started exits -1, which is not rg saying it
+        -- found nothing -- and must not be reported as an empty result set.
+        local result = run_search("hit", { cwd = _root .. "/no/such/dir" })
+        assert.is_nil(result[1])
+        assert.is_truthy(tostring(result.err):match("could not run rg"))
+    end)
+
+    it("lists a file once when --follow reaches it through a symlink", function()
+        write_file("real/a.txt", { "hit one" })
+        assert.equals(0, vim.fn.system({ "ln", "-s", _root .. "/real",
+            _root .. "/link" }) and vim.v.shell_error)
+        -- Loaded through the link, so the buffer's own name resolves to the
+        -- real path while rg prints whichever spelling it walked.
+        assert(require("greplace.util").ensure_buf(_root .. "/link/a.txt"))
+
+        local matches = run_search("hit", { flags = { follow = true } })
+        assert.equals(1, #matches)
+        assert.equals("real/a.txt", matches[1].relpath)
+        -- And it is the buffer's text, not the disk copy read twice.
+        assert.is_truthy(matches[1].bufnr)
+    end)
+
+    it("leaves a hidden file out of the buffer pass, as rg does on disk", function()
+        write_file("plain.txt", { "hit one" })
+        write_file(".secret", { "hit two" })
+        -- Loaded, so only the buffer pass can reach it: rg never walks it.
+        assert(require("greplace.util").ensure_buf(_root .. "/.secret"))
+
+        local function relpaths(opts)
+            local out = {}
+            for _, m in ipairs(run_search("hit", opts)) do out[#out + 1] = m.relpath end
+            table.sort(out)
+            return out
+        end
+
+        assert.same({ "plain.txt" }, relpaths())
+        assert.same({ ".secret", "plain.txt" }, relpaths({ flags = { hidden = true } }))
+        -- A `--glob` that matches is rg's own override of the hidden rule.
+        assert.same({ ".secret" }, relpaths({ flags = { glob = { ".secret" } } }))
+    end)
+
+    it("lists a file once when --follow reaches it through a symlink, with no buffer open", function()
+        -- The same line, reached twice: rg walks the real directory and the
+        -- link to it and reports each spelling as a match of its own. Listed
+        -- twice, the panel would offer the same edit twice and apply it
+        -- twice -- the second time to a line that no longer holds what it was
+        -- rendered with. Nothing is loaded here, so the open-buffer dedup is
+        -- not what is being leant on.
+        write_file("real/a.txt", { "hit one" })
+        assert.equals(0, vim.fn.system({ "ln", "-s", _root .. "/real",
+            _root .. "/link" }) and vim.v.shell_error)
+
+        local matches = run_search("hit", { flags = { follow = true } })
+        assert.equals(1, #matches)
+        assert.equals("real/a.txt", matches[1].relpath)
+        assert.is_nil(matches[1].bufnr)
+    end)
+
+    it("leaves an unmodified buffer to the disk pass, still marking it as open", function()
+        -- An unmodified buffer holds what the file holds, so searching it a
+        -- second time through stdin would only arrive at the same match. It
+        -- is still open, which is what the panel's indicator reports, so the
+        -- match has to come back carrying its buffer.
+        local path  = write_file("a.txt", { "hit one" })
+        local bufnr = assert(require("greplace.util").ensure_buf(path))
+
+        local matches = run_search("hit")
+        assert.equals(1, #matches)
+        assert.equals(bufnr, matches[1].bufnr)
+        assert.equals("hit one", matches[1].text)
+
+        -- And the pass that would have read it is not given it to read.
+        local bufs = search.open_buffers(_root)
+        assert.equals(1, #bufs)
+        assert.is_false(bufs[1].modified)
+        assert.same({}, bufs[1].lines)
+    end)
+
+    it("applies an edit to a match on an empty source line", function()
+        -- A panel can list a blank line (`--regex -- ^$`, `--invert`), and
+        -- with one match that leaves the buffer holding a single empty line --
+        -- which is also what `ggdG` leaves. Told apart by the anchors, so
+        -- that the one match the panel holds is not quietly dropped from the
+        -- write.
+        local a = write_file("a.txt", { "", "second" })
+        local matches = run_search("^$", { flags = { regex = true } })
+        assert.equals(1, #matches)
+        assert.equals(1, matches[1].lnum)
+
+        local pbuf = panel.open(matches, {
+            query = "^$", root = _root, height = 10, on_write = function() end,
+        })
+        assert.same({ "" }, vim.api.nvim_buf_get_lines(pbuf, 0, -1, false))
+
+        -- Untouched, it is still a region the write knows about, not a
+        -- deletion.
+        local regions = panel.regions(pbuf)
+        assert.equals(1, #regions)
+        assert.same({ "" }, regions[1].lines)
+
+        edit_row(pbuf, 0, { "filled in" })
+        local result = apply.run(panel.regions(pbuf))
+        assert.equals(1, result.replaced)
+        assert.same({ "filled in", "second" }, buf_lines(a))
+    end)
+
+    it("previews many edits to one file in line order", function()
+        -- Built in one forward pass rather than by splicing each edit into a
+        -- copy of the file, which costs a pass over the file per edit.
+        local lines = {}
+        for i = 1, 200 do lines[i] = "line " .. i end
+        local a = write_file("a.txt", lines)
+        local regions = {}
+        for i = 1, 200 do
+            regions[i] = {
+                entry = { path = a, relpath = "a.txt", lnum = i, text = "line " .. i },
+                lines = { "LINE " .. i },
+            }
+        end
+        -- One region left unedited, and one whose source has moved on.
+        regions[100].lines = { "line 100" }
+        regions[150].entry.text = "something else"
+
+        local preview = apply.preview(regions)
+        assert.equals(1, #preview.files)
+        assert.equals(1, #preview.skipped)
+        assert.equals(150, preview.skipped[1].entry.lnum)
+
+        local after = preview.files[1].after
+        assert.equals(200, #after)
+        assert.equals("LINE 1", after[1])
+        assert.equals("line 100", after[100])
+        assert.equals("line 150", after[150])
+        assert.equals("LINE 200", after[200])
+        -- Nothing was loaded or written to arrive at that.
+        assert.is_nil(require("greplace.util").find_buf(a))
+        assert.same(lines, vim.fn.readfile(a))
+    end)
+
+    it("cancels the running search when the panel is wiped out", function()
+        write_file("a.txt", { "hit one" })
+        greplace.open("hit")
+        local bufnr = assert(panel.find_buf())
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+        vim.wait(500, function() return false end, 20)
+        -- The search dropped its results rather than resurrecting the panel.
+        assert.is_nil(panel.find_buf())
+    end)
+end)
