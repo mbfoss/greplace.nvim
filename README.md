@@ -161,8 +161,7 @@ The panel opens as soon as the search is triggered and says that it is
 searching until the results replace it.
 
 Files that are open in a buffer are searched from their current, unsaved text,
-not from disk; their locations are marked with `≡`, and the winbar counts the
-files that came from a buffer.
+not from disk; their locations are marked with `≡`.
 
 ### Mappings
 
@@ -187,13 +186,22 @@ anchor, which makes the obvious edits mean the obvious thing:
 - **change the line** → the source line is rewritten
 - **delete the line** (`dd`) → that match is dropped: its source line is left
   exactly as it is
-- **split it into several lines** → the source line is replaced by all of them
+- **add a line** (`o`, a linewise `p`, `<CR>` mid-line, `:s/x/\r/`) → refused:
+  the change is taken back with a warning
+- **join two lines** (`J`, a charwise delete across a line break, `<BS>` at the
+  start of a line) → refused the same way
 - **empty the panel** (`ggdG`) → nothing is changed at all
 
 Deleting lines is how you narrow a result set down to the matches you actually
 want to replace; it never removes anything from a file. The dropped line's
 `file:line` disappears with it, so the locations left in the panel keep lining
 up with the lines they belong to, and `u` brings both back.
+
+A match is one source line and stays one line in the panel. The lines a change
+added or joined are put back as they were, and the cursor stays where the break
+was; in Insert mode you stay in Insert mode.
+
+An edited line is marked with a `●` in front of its `│`.
 
 A line whose source has moved since the search (an edit elsewhere, a reload) is
 left untouched and reported as skipped. After a write the panel re-renders with
@@ -220,10 +228,11 @@ require("greplace").setup({
 | Group | Default | Meaning |
 | --- | --- | --- |
 | `GreplaceLocation` | `Directory` | `file:line` of a match |
-| `GreplaceBufferIndicator` | `Special` | the `≡` in front of a match from an open buffer, and the winbar's count of those files |
+| `GreplaceBufferIndicator` | `Special` | the `≡` in front of a match from an open buffer |
 | `GreplaceSeparator` | `Comment` | the `│` between location and text |
 | `GreplaceMatch` | `Label` | the matched text itself |
 | `GreplaceLimit` | `WarningMsg` | the winbar's "limit of N reached" note |
+| `GreplaceChanged` | `Changed` | the `●` in front of the `│` of an edited line |
 
 ## Development
 

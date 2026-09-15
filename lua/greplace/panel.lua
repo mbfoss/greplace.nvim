@@ -9,13 +9,16 @@ local M = {}
 -- of where a line came from, and because extmarks travel with the edits around
 -- them, it still points at the right buffer row after lines have been inserted,
 -- joined or deleted. `M.regions()` reads those anchors back at write time.
+--
+-- Every line stays one line: a change that adds one (`o`, a linewise put, a
+-- `<CR>` typed mid-line) or joins two (`J`) is taken back as soon as it lands.
+-- A line the user has edited is marked in front of its `│`.
 -- ---------------------------------------------------------------------------
 
 local config   = require("greplace.config")
 local util     = require("greplace.util")
 local ui       = require("greplace.util.ui")
 local strutil  = require("greplace.util.strutil")
-local throttle = require("greplace.util.throttle")
 
 local _NAME    = "greplace://replace"
 local _ns      = vim.api.nvim_create_namespace("greplace.anchor")
@@ -27,6 +30,12 @@ local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
 -- rather than only a highlight, which a colorscheme can leave looking like the
 -- plain one.
 local _buffer_indicator = "≡ "
+
+-- Drawn in front of the `│` of a match whose line has been edited, so that the
+-- lines a write would rewrite stand out from the column alone. Every row
+-- reserves its width, so the `│` stays aligned whichever rows carry it.
+local _changed_marker = "●"
+local _no_marker      = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker))
 
 -- The panel opens the moment a search is triggered, before there is anything
 -- to show, so the results land in a window that is already there rather than
@@ -40,7 +49,6 @@ local _buffer_indicator = "≡ "
 ---@field relpath string
 ---@field lnum    integer  1-indexed line in the source file
 ---@field text    string   the source line as it was when the panel rendered
----@field loaded  boolean  the text came from a loaded buffer, not from disk
 
 ---State of the one panel buffer: the anchor extmark id of each match, and the
 ---query it was built from.
@@ -56,6 +64,19 @@ local _buffer_indicator = "≡ "
 ---                          the first `limit` matches of more
 ---@field message string?  final status -- "no matches", or the error that
 ---                       ended the search -- kept so a redraw can restore it
+---@field changed table<integer, boolean>  anchors whose line no longer holds
+---                       the text it was rendered with, and so draw the marker
+---@field lines   string[]?  the buffer's lines, kept in step by `on_lines`; set
+---                        once a result list is rendered
+---@field changes { first:integer, count:integer, old:string[] }[]  the changes
+---                        since the last check, in order: `count` lines from
+---                        row `first` replaced `old`
+---@field reverting boolean?  `guard_lines` is putting changes back, which are
+---                        not themselves changes to record
+---@field stats   greplace.Stats?  the winbar's counts; set once a result list
+---                        is rendered
+---@field per_file table<string, integer>?  how many of each file's matches
+---                        still have a line, for `stats.files`
 
 ---@type table<integer, greplace.PanelState>
 local _state = {}
@@ -85,12 +106,16 @@ function M.is_panel(bufnr)
     return _state[bufnr] ~= nil
 end
 
---- Which anchors have had their line removed: an anchor owns the rows from its
---- own down to the next anchor's, so it is empty when the next one has caught
---- up with it (or when it has been pushed past the end of the buffer). Removing
---- a line drops that match from the replacement; it never touches the file.
+--- Which anchors have had their line removed. Deleting a line leaves its
+--- anchor on the row of the next match's, so when anchors share a row, the
+--- match that owns it is the last one listed there -- the highest extmark id,
+--- since ids were handed out in listing order. Not the last in buffer order:
+--- marks at one position come back in no particular order. An anchor pushed
+--- past the end of the buffer has no line either. Removing a line drops that
+--- match from the replacement; it never touches the file.
 ---@param bufnr integer
----@param marks integer[][]  anchors in buffer order, as `nvim_buf_get_extmarks`
+---@param marks integer[][]  as `nvim_buf_get_extmarks`, taking in every anchor
+---                          of each row they reach
 ---@param total integer      the buffer's line count
 ---@return table<integer, boolean> empty  keyed by extmark id
 local function empty_anchors(bufnr, marks, total)
@@ -100,93 +125,246 @@ local function empty_anchors(bufnr, marks, total)
     local blank = total == 1
         and vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1] == ""
 
+    local owner = {}
+    for _, mark in ipairs(marks) do
+        owner[mark[2]] = math.max(owner[mark[2]] or 0, mark[1])
+    end
     local empty = {}
-    for i, mark in ipairs(marks) do
-        local id, row  = mark[1], mark[2]
-        local next_row = marks[i + 1] and marks[i + 1][2] or total
-        empty[id] = blank or next_row <= row
+    for _, mark in ipairs(marks) do
+        local id, row = mark[1], mark[2]
+        empty[id] = blank or row >= total or owner[row] ~= id
     end
     return empty
 end
 
---- Show each anchor's location again, or hide it where the line it belonged to
---- has been removed. Without this a removed line's anchor -- which survives, so
---- that the write knows to leave that match out -- would keep drawing its
---- `file:line` inline on whatever row it collapsed onto, stacked in front of
---- that row's own location.
+--- Add a match to the winbar's counts (`n = 1`) or take it out (`n = -1`), as
+--- its line comes back or is removed.
+---@param state greplace.PanelState
+---@param id    integer  anchor extmark id
+---@param n     1|-1
+local function tally(state, id, n)
+    local stats, per_file = assert(state.stats), assert(state.per_file)
+    local entry = state.entries[id]
+    stats.lines = stats.lines + n
+    if state.changed[id] then stats.changes = stats.changes + n end
+    local left = (per_file[entry.path] or 0) + n
+    per_file[entry.path] = left
+    -- A file counts while any of its matches does.
+    if left == (n > 0 and 1 or 0) then
+        stats.files = stats.files + n
+    end
+end
+
+--- Show or clear an anchor's changed marker. Its virtual text is re-set only
+--- while it is drawn: a hidden anchor picks the marker up from `state.virt`
+--- when `redraw` shows it again.
+---@param bufnr   integer
+---@param state   greplace.PanelState
+---@param id      integer  anchor extmark id
+---@param row     integer
+---@param col     integer
+---@param changed boolean
+local function set_marker(bufnr, state, id, row, col, changed)
+    local virt = state.virt[id]
+    -- The marker is the chunk just before the `│`, the last one.
+    virt[#virt - 1][1] = changed and _changed_marker or _no_marker
+    if state.hidden[id] then return end
+    vim.api.nvim_buf_set_extmark(bufnr, _ns, row, col, {
+        id            = id,
+        virt_text     = virt,
+        virt_text_pos = "inline",
+        right_gravity = false,
+    })
+end
+
+--- Bring the anchors on rows `lo`..`hi` up to date with their lines, along
+--- with the winbar's counts. A change to those rows cannot give a line to, or
+--- take one from, an anchor on any other row -- row `hi` included, being where
+--- the anchors of lines deleted just above it end up.
+---
+--- - a removed line's anchor stops drawing its location. Without this, that
+---   anchor -- which survives, so that the write knows to leave that match
+---   out -- would keep drawing its `file:line` inline on whatever row it
+---   collapsed onto, stacked in front of that row's own location.
+--- - the changed marker shows while a line no longer holds the text it was
+---   rendered with.
+---
+--- An extmark is only re-set when what it draws changes: this runs on every
+--- edit, and re-setting even a handful of anchors per keystroke is not free.
 ---@param bufnr integer
-local function sync_virt(bufnr)
+---@param lo    integer  0-indexed
+---@param hi    integer  0-indexed, inclusive
+local function redraw(bufnr, lo, hi)
     local state = _state[bufnr]
-    if not state then return end
+    if not state or not state.stats then return end
 
     local total = vim.api.nvim_buf_line_count(bufnr)
-    local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, 0, -1, {})
+    local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { lo, 0 }, { hi, -1 }, {})
     local empty = empty_anchors(bufnr, marks, total)
-
+    local lines = vim.api.nvim_buf_get_lines(bufnr, lo, math.min(hi + 1, total), false)
     for _, mark in ipairs(marks) do
         local id, row, col = mark[1], mark[2], mark[3]
-        local hide = empty[id] or false
-        -- An anchor pushed past the last line (the final match's line removed)
-        -- has no row to draw on and cannot be re-set at one either -- moving it
-        -- back onto the last line would make the anchor above it look like the
-        -- deleted one instead. It draws nothing as it is, so leave it be.
-        --
-        -- Otherwise only when it changes: this runs on every edit, and
-        -- re-setting every anchor of a long result list per keystroke is not
-        -- free.
-        if state.entries[id] and row < total and state.hidden[id] ~= hide then
+        local hide = empty[id]
+        if state.entries[id] and state.hidden[id] ~= hide then
             state.hidden[id] = hide
-            vim.api.nvim_buf_set_extmark(bufnr, _ns, row, col, {
-                id            = id,
-                virt_text     = not hide and state.virt[id] or nil,
-                virt_text_pos = "inline",
-                right_gravity = false,
-            })
+            tally(state, id, hide and -1 or 1)
+            -- An anchor pushed past the last line (the final match's line
+            -- removed) has no row to draw on and cannot be re-set at one
+            -- either -- moving it back onto the last line would make the
+            -- anchor above it look like the deleted one instead. It draws
+            -- nothing as it is, so leave it be.
+            if row < total then
+                vim.api.nvim_buf_set_extmark(bufnr, _ns, row, col, {
+                    id            = id,
+                    virt_text     = not hide and state.virt[id] or nil,
+                    virt_text_pos = "inline",
+                    right_gravity = false,
+                })
+            end
+        end
+        if state.entries[id] and not hide and row < total then
+            local changed = lines[row - lo + 1] ~= state.entries[id].text
+            if changed ~= (state.changed[id] == true) then
+                state.changed[id] = changed or nil
+                state.stats.changes = state.stats.changes + (changed and 1 or -1)
+                set_marker(bufnr, state, id, row, col, changed)
+            end
         end
     end
+end
+
+--- Whether rows `lo`..`hi` no longer have one line per match: a row no anchor
+--- sits on, which a change added, or an anchor part-way along a row, where a
+--- change joined the line that anchor starts onto the one above it. Rows no
+--- change touched still have theirs.
+---@param bufnr integer
+---@param lo    integer  0-indexed
+---@param hi    integer  0-indexed, inclusive
+---@return boolean
+local function is_broken(bufnr, lo, hi)
+    local total = vim.api.nvim_buf_line_count(bufnr)
+    local owned = {}
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, { lo, 0 }, { hi, -1 }, {})) do
+        -- One pushed past the last line has no line of its own to break.
+        if mark[2] < total then
+            if mark[3] > 0 then return true end
+            owned[mark[2]] = true
+        end
+    end
+    for row = lo, math.min(hi, total - 1) do
+        if not owned[row] then return true end
+    end
+    return false
+end
+
+--- Put every anchor back at the start of its match's line: the matches that
+--- have a line take the rows in the order the search listed them (extmark ids
+--- were handed out in that order), and one whose line was removed sits on the
+--- next one's row, as a removed line's anchor does.
+---@param bufnr integer
+---@param state greplace.PanelState
+---@return table<integer, integer> rows  each anchor's row, keyed by extmark id
+local function relayout(bufnr, state)
+    local ids = vim.tbl_keys(state.entries)
+    table.sort(ids)
+    local rows, row = {}, 0
+    for _, id in ipairs(ids) do
+        if not state.hidden[id] then rows[id], row = row, row + 1 end
+    end
+    for i = #ids, 1, -1 do
+        local id = ids[i]
+        if rows[id] then row = rows[id] else rows[id] = row end
+    end
+    for _, id in ipairs(ids) do
+        vim.api.nvim_buf_set_extmark(bufnr, _ns, rows[id], 0, {
+            id            = id,
+            virt_text     = not state.hidden[id] and state.virt[id] or nil,
+            virt_text_pos = "inline",
+            right_gravity = false,
+            -- A removed match with no match after it is parked past the last
+            -- line, where a removed last line leaves its anchor.
+            strict        = false,
+        })
+    end
+    return rows
+end
+
+--- Take back a change that added a line to the panel or joined two of its
+--- lines. A match is one source line, and the panel is edited line for line:
+--- there is nowhere for a new line to go, and a joined line would be two
+--- matches' text with the second one's `file:line` drawn in the middle of it.
+---
+--- Every change since the last check is reverted, newest first, from the old
+--- text `on_lines` kept for it; that puts back what 'autoindent' dropped from
+--- a line broken with `<CR>`, which joining the halves again would not. The
+--- revert is joined to the change's undo block, so that `u` never walks back
+--- into the broken state. The cursor stays on the same character of the same
+--- match's line, as near as it can.
+---@param bufnr integer
+---@param lo    integer  0-indexed first row the changes touched
+---@param hi    integer  0-indexed last row, inclusive
+---@return boolean reverted
+local function guard_lines(bufnr, lo, hi)
+    local state = _state[bufnr]
+    if not state or not state.changes then return false end
+    local changes = state.changes
+    state.changes = {}
+
+    -- A change confined to one line can neither add a line nor join two.
+    local reshaped = vim.iter(changes):any(function(c) return c.count ~= 1 or #c.old ~= 1 end)
+    if not reshaped or not next(state.entries) or not is_broken(bufnr, lo, hi) then
+        return false
+    end
+    vim.notify("greplace: panel lines cannot be added or joined; change reverted",
+        vim.log.levels.WARN)
+
+    -- Where the cursor goes: as far into its match's line as it is now, the
+    -- match being the last one to start at or before it.
+    local cur = vim.api.nvim_get_current_buf() == bufnr and vim.api.nvim_win_get_cursor(0)
+    local at, offset = nil, cur and cur[2] or 0
+    if cur then
+        local mark = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { cur[1] - 1, cur[2] }, 0, { limit = 1 })[1]
+        if mark then
+            at, offset = mark[1], cur[2] - mark[3]
+            for _, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, mark[2], cur[1] - 1, false)) do
+                offset = offset + #line
+            end
+        end
+    end
+
+    pcall(vim.cmd.undojoin)
+    state.reverting = true
+    local ok, err = pcall(function()
+        for i = #changes, 1, -1 do
+            local c = changes[i]
+            vim.api.nvim_buf_set_lines(bufnr, c.first, c.first + c.count, false, c.old)
+        end
+    end)
+    state.reverting = false
+    if not ok then error(err) end
+
+    local rows = relayout(bufnr, state)
+    if cur then
+        local row  = at and rows[at] or 0
+        local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
+        pcall(vim.api.nvim_win_set_cursor, 0, { row + 1, math.min(offset, #text) })
+    end
+    return true
 end
 
 ---@class greplace.Stats
 ---@field files   integer  distinct files still listed
 ---@field lines   integer  matches still listed (a removed one does not count)
 ---@field changes integer  listed matches whose text no longer matches the source
----@field loaded  integer  listed files whose text came from a loaded buffer
 
---- Count what the panel currently holds. A removed line drops out of every
---- count -- it is no longer part of the replacement -- and a match whose region
---- has grown to several lines is still one changed match, not several.
+--- What the panel currently holds. A removed line drops out of every count --
+--- it is no longer part of the replacement. The counts are kept up to date by
+--- `redraw`, which runs shortly after an edit rather than within it.
 ---@param bufnr integer
 ---@return greplace.Stats?  nil when the buffer is not a rendered panel
 function M.stats(bufnr)
     local state = _state[bufnr]
-    if not state then return end
-
-    -- One read of the whole buffer rather than one per anchor: this runs on
-    -- every edit that could move an anchor, and a result list can be long.
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    local total = #lines
-    local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, 0, -1, {})
-    local empty = empty_anchors(bufnr, marks, total)
-
-    local files, stats = {}, { files = 0, lines = 0, changes = 0, loaded = 0 }
-    for i, mark in ipairs(marks) do
-        local id, row = mark[1], mark[2]
-        local entry   = state.entries[id]
-        if entry and not empty[id] then
-            local stop = marks[i + 1] and marks[i + 1][2] or total
-            stats.lines = stats.lines + 1
-            if not files[entry.path] then
-                files[entry.path] = true
-                stats.files = stats.files + 1
-                if entry.loaded then stats.loaded = stats.loaded + 1 end
-            end
-            -- Unchanged means exactly one line, holding what was rendered.
-            if stop ~= row + 1 or lines[row + 1] ~= entry.text then
-                stats.changes = stats.changes + 1
-            end
-        end
-    end
-    return stats
+    return state and state.stats and vim.deepcopy(state.stats)
 end
 
 ---@param n    integer
@@ -205,21 +383,15 @@ local function set_winbar(bufnr, status)
     if not config.options.winbar then return end
     if not _state[bufnr] then return end
 
-    -- A final message outlives the buffer write that showed it: writing the
-    -- status line into the buffer is itself an edit, and the throttled redraw
-    -- it triggers would otherwise put the counts of an empty panel back.
+    -- A final message outlives the buffer write that showed it, so that any
+    -- redraw of the winbar puts it back rather than the counts of an empty
+    -- panel.
     local text = status or _state[bufnr].message
     if not text then
         local st = M.stats(bufnr)
         text = st and string.format("%s  %s  %s",
             plural(st.files, "file"), plural(st.lines, "line"),
             plural(st.changes, "change")) or ""
-        -- In the indicator's highlight, and only when there is one, so a
-        -- search that touched no open buffer reads as it always has.
-        if st and st.loaded > 0 then
-            text = string.format("%s  %%#GreplaceBufferIndicator#%s %d open%%#GreplaceSeparator#",
-                text, vim.trim(_buffer_indicator), st.loaded)
-        end
     end
 
     -- A truncated list is a partial answer to the query, and one that stays
@@ -254,10 +426,14 @@ function M.entry_at(bufnr, row)
     if not state then return end
     -- Searching backwards from `row` and stopping at the first hit avoids
     -- walking every anchor in a long result list.
-    local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { row, -1 }, 0, { limit = 1 })
-    local mark  = marks[1]
+    local mark = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { row, -1 }, 0, { limit = 1 })[1]
     if not mark then return end
-    return state.entries[mark[1]], mark[2]
+    -- Of the anchors on that row, the match that owns it (see `empty_anchors`).
+    local id = mark[1]
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, { mark[2], 0 }, { mark[2], -1 }, {})) do
+        id = math.max(id, m[1])
+    end
+    return state.entries[id], mark[2]
 end
 
 --- Open the source of the line under the cursor, in a regular window (never
@@ -312,6 +488,24 @@ local function hover(bufnr)
     })
 end
 
+--- Replace `list[first + 1 .. last]` with `new`, in place: the tail is shifted
+--- once, so a change that adds or removes lines allocates no second copy of a
+--- list as long as the panel.
+---@param list  string[]
+---@param first integer
+---@param last  integer
+---@param new   string[]
+local function splice(list, first, last, new)
+    local n, shift = #list, #new - (last - first)
+    if shift > 0 then
+        for i = n, last + 1, -1 do list[i + shift] = list[i] end
+    elseif shift < 0 then
+        for i = last + 1, n do list[i + shift] = list[i] end
+        for i = n, n + shift + 1, -1 do list[i] = nil end
+    end
+    for i, line in ipairs(new) do list[first + i] = line end
+end
+
 ---@param on_write fun(bufnr:integer)
 ---@return integer bufnr
 local function create_buf(on_write)
@@ -357,30 +551,56 @@ local function create_buf(on_write)
     -- as the change lands rather than on the way back to the main loop.
     -- Its callback runs in a context where the API is off limits, hence the
     -- `vim.schedule`; one pending pass is enough however many lines changed.
-    local pending = false
-    -- The counts do move on a single-line edit -- typing into a line is what
-    -- makes it a change -- so unlike `sync_virt` the winbar cannot skip those.
-    -- Throttled instead, since it costs a scan of every anchor and no one reads
-    -- a counter mid-keystroke. `on_lines` runs where the API is off limits,
-    -- hence the `vim.schedule` inside the throttled body rather than around it.
-    local bump = throttle.throttle_wrap(120, function()
-        vim.schedule(function() set_winbar(bufnr) end)
-    end)
+    -- The rows that pass has to look at, `{ first, last }` (inclusive), in the
+    -- buffer's current numbering: every row a change since the last pass
+    -- touched, and the row below, where the anchors of deleted lines land.
+    ---@type integer[]?
+    local pending = nil
     vim.api.nvim_buf_attach(bufnr, false, {
         on_lines = function(_, _, _, first, last_old, last_new)
-            if not _state[bufnr] then return true end -- detach with the panel
-            bump()
-            -- A change confined to one line cannot make an anchor's region
-            -- empty or fill it again: no anchor moved relative to another, and
-            -- none was added or removed. That is every keystroke of ordinary
-            -- typing, and skipping it here keeps a large panel's edits from
-            -- paying for a full anchor scan per character.
-            if first + 1 == last_old and last_old == last_new then return end
-            if pending then return end
-            pending = true
+            local state = _state[bufnr]
+            if not state then return true end -- detach with the panel
+            -- Keep the mirror in step, and note what the change replaced so
+            -- that `guard_lines` can put it back. A buffer emptied outright is
+            -- reported as holding no lines, though it keeps one empty line,
+            -- which the next change then reports replacing.
+            local mirror = state.lines
+            if mirror then
+                local old   = vim.list_slice(mirror, first + 1, last_old)
+                local count = last_new - first
+                splice(mirror, first, last_old,
+                    vim.api.nvim_buf_get_lines(bufnr, first, last_new, false))
+                if #mirror == 0 then mirror[1], count = "", 1 end
+                if not state.reverting then
+                    table.insert(state.changes, { first = first, count = count, old = old })
+                end
+            end
+
+            if pending then
+                -- Rows below the change move with it; a row inside the lines
+                -- it replaced is now somewhere among the new ones.
+                local last = pending[2]
+                if last >= last_old then
+                    last = last + last_new - last_old
+                elseif last > first then
+                    last = last_new
+                end
+                pending[1] = math.min(pending[1], first)
+                pending[2] = math.max(last, last_new)
+                return
+            end
+            pending = { first, last_new }
             vim.schedule(function()
-                pending = false
-                sync_virt(bufnr)
+                local lo, hi = pending[1], pending[2]
+                pending = nil
+                local st = _state[bufnr]
+                if not st or not vim.api.nvim_buf_is_valid(bufnr) then return end
+                -- Before the redraw, which would record the broken state's
+                -- removed lines as the ones to keep hidden. A revert is a
+                -- change of its own, which gets a pass of its own.
+                if guard_lines(bufnr, lo, hi) then return end
+                redraw(bufnr, lo, hi)
+                if st.stats then set_winbar(bufnr) end
             end)
         end,
     })
@@ -501,6 +721,11 @@ local function render(bufnr, matches)
     state.entries = {}
     state.virt    = {}
     state.hidden  = {}
+    state.changed = {}
+    state.lines   = lines
+    state.changes = {}
+    state.stats   = { files = 0, lines = 0, changes = 0 }
+    state.per_file = {}
 
     -- The indicator column is only drawn when some match needs it, so a search
     -- that touched no open buffer gives up no width to it. When drawn, every
@@ -520,7 +745,9 @@ local function render(bufnr, matches)
             math.max(0, width - vim.fn.strdisplaywidth(location)))
         local virt     = {
             { location,          "GreplaceLocation" },
-            { pad .. " │ ",      "GreplaceSeparator" },
+            { pad .. " ",        "GreplaceSeparator" },
+            { _no_marker,        "GreplaceChanged" },
+            { " │ ",             "GreplaceSeparator" },
         }
         if indicator then
             table.insert(virt, 1, {
@@ -543,8 +770,8 @@ local function render(bufnr, matches)
             relpath = m.relpath,
             lnum    = m.lnum,
             text    = m.text,
-            loaded  = m.bufnr ~= nil,
         }
+        tally(state, id, 1)
         for _, sm in ipairs(m.subs) do
             vim.api.nvim_buf_set_extmark(bufnr, _ns_hl, row - 1, sm.s, {
                 end_col  = math.min(sm.e, #m.text),
@@ -606,6 +833,8 @@ function M.open_loading(opts)
         virt    = {},
         hidden  = {},
         truncated = false,
+        changed   = {},
+        changes   = {},
     }
     show(bufnr, opts.height)
     set_winbar(bufnr, "searching ...")
@@ -634,6 +863,8 @@ function M.open(matches, opts)
         virt      = {},
         hidden    = {},
         truncated = opts.truncated or false,
+        changed   = {},
+        changes   = {},
     }
     show(bufnr, opts.height)
     render(bufnr, matches)
@@ -678,9 +909,13 @@ function M.regions(bufnr)
         local id, row = mark[1], mark[2]
         local entry   = state.entries[id]
         if entry then
-            local next_mark = marks[i + 1]
-            local stop      = next_mark and next_mark[2] or total
-            out[#out + 1]   = {
+            -- Up to the next row an anchor sits on: the anchors on this one
+            -- are the removed matches' ones, in no particular order.
+            local stop = total
+            for j = i + 1, #marks do
+                if marks[j][2] > row then stop = marks[j][2]; break end
+            end
+            out[#out + 1] = {
                 entry = entry,
                 lines = not empty[id]
                     and vim.api.nvim_buf_get_lines(bufnr, row, stop, false)
@@ -705,6 +940,7 @@ function M.setup_highlights()
         -- them.
         GreplaceMatch           = { link = "Label" },
         GreplaceLimit           = { link = "WarningMsg" },
+        GreplaceChanged         = { link = "Changed" },
     }
     for name, def in pairs(defaults) do
         vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))
