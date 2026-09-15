@@ -161,7 +161,8 @@ The panel opens as soon as the search is triggered and says that it is
 searching until the results replace it.
 
 Files that are open in a buffer are searched from their current, unsaved text,
-not from disk; their locations are marked with a distinct highlight.
+not from disk; their locations are marked with `≡`, and the winbar counts the
+files that came from a buffer.
 
 ### Mappings
 
@@ -218,8 +219,8 @@ require("greplace").setup({
 
 | Group | Default | Meaning |
 | --- | --- | --- |
-| `GreplaceLocation` | `Directory` | `file:line` of an on-disk match |
-| `GreplaceBufferLocation` | `Special` | `file:line` of a match in an open buffer |
+| `GreplaceLocation` | `Directory` | `file:line` of a match |
+| `GreplaceBufferIndicator` | `Special` | the `≡` in front of a match from an open buffer, and the winbar's count of those files |
 | `GreplaceSeparator` | `Comment` | the `│` between location and text |
 | `GreplaceMatch` | `Label` | the matched text itself |
 | `GreplaceLimit` | `WarningMsg` | the winbar's "limit of N reached" note |

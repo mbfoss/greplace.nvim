@@ -22,6 +22,12 @@ local _ns      = vim.api.nvim_create_namespace("greplace.anchor")
 local _ns_hl   = vim.api.nvim_create_namespace("greplace.match")
 local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
 
+-- Drawn in front of the location of a match that came from a loaded buffer --
+-- and so shows the buffer's text, which may not be what is on disk. A glyph
+-- rather than only a highlight, which a colorscheme can leave looking like the
+-- plain one.
+local _buffer_indicator = "≡ "
+
 -- The panel opens the moment a search is triggered, before there is anything
 -- to show, so the results land in a window that is already there rather than
 -- one that appears seconds later under the cursor. Until they do, the buffer
@@ -34,6 +40,7 @@ local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
 ---@field relpath string
 ---@field lnum    integer  1-indexed line in the source file
 ---@field text    string   the source line as it was when the panel rendered
+---@field loaded  boolean  the text came from a loaded buffer, not from disk
 
 ---State of the one panel buffer: the anchor extmark id of each match, and the
 ---query it was built from.
@@ -143,6 +150,7 @@ end
 ---@field files   integer  distinct files still listed
 ---@field lines   integer  matches still listed (a removed one does not count)
 ---@field changes integer  listed matches whose text no longer matches the source
+---@field loaded  integer  listed files whose text came from a loaded buffer
 
 --- Count what the panel currently holds. A removed line drops out of every
 --- count -- it is no longer part of the replacement -- and a match whose region
@@ -160,7 +168,7 @@ function M.stats(bufnr)
     local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, 0, -1, {})
     local empty = empty_anchors(bufnr, marks, total)
 
-    local files, stats = {}, { files = 0, lines = 0, changes = 0 }
+    local files, stats = {}, { files = 0, lines = 0, changes = 0, loaded = 0 }
     for i, mark in ipairs(marks) do
         local id, row = mark[1], mark[2]
         local entry   = state.entries[id]
@@ -170,6 +178,7 @@ function M.stats(bufnr)
             if not files[entry.path] then
                 files[entry.path] = true
                 stats.files = stats.files + 1
+                if entry.loaded then stats.loaded = stats.loaded + 1 end
             end
             -- Unchanged means exactly one line, holding what was rendered.
             if stop ~= row + 1 or lines[row + 1] ~= entry.text then
@@ -205,6 +214,12 @@ local function set_winbar(bufnr, status)
         text = st and string.format("%s  %s  %s",
             plural(st.files, "file"), plural(st.lines, "line"),
             plural(st.changes, "change")) or ""
+        -- In the indicator's highlight, and only when there is one, so a
+        -- search that touched no open buffer reads as it always has.
+        if st and st.loaded > 0 then
+            text = string.format("%s  %%#GreplaceBufferIndicator#%s %d open%%#GreplaceSeparator#",
+                text, vim.trim(_buffer_indicator), st.loaded)
+        end
     end
 
     -- A truncated list is a partial answer to the query, and one that stays
@@ -487,6 +502,14 @@ local function render(bufnr, matches)
     state.virt    = {}
     state.hidden  = {}
 
+    -- The indicator column is only drawn when some match needs it, so a search
+    -- that touched no open buffer gives up no width to it. When drawn, every
+    -- row reserves it, keeping the locations and the `│` aligned.
+    local indicator = false
+    for _, m in ipairs(matches) do
+        if m.bufnr then indicator = true; break end
+    end
+
     for row, m in ipairs(matches) do
         -- Cropped on the left: the tail -- file name and line number -- is what
         -- tells one match from another, while the leading directories are the
@@ -496,9 +519,16 @@ local function render(bufnr, matches)
         local pad      = string.rep(" ",
             math.max(0, width - vim.fn.strdisplaywidth(location)))
         local virt     = {
-            { location, m.bufnr and "GreplaceBufferLocation" or "GreplaceLocation" },
-            { pad .. " │ ",                                   "GreplaceSeparator" },
+            { location,          "GreplaceLocation" },
+            { pad .. " │ ",      "GreplaceSeparator" },
         }
+        if indicator then
+            table.insert(virt, 1, {
+                m.bufnr and _buffer_indicator
+                    or string.rep(" ", vim.fn.strdisplaywidth(_buffer_indicator)),
+                "GreplaceBufferIndicator",
+            })
+        end
         local id       = vim.api.nvim_buf_set_extmark(bufnr, _ns, row - 1, 0, {
             virt_text     = virt,
             virt_text_pos = "inline",
@@ -513,6 +543,7 @@ local function render(bufnr, matches)
             relpath = m.relpath,
             lnum    = m.lnum,
             text    = m.text,
+            loaded  = m.bufnr ~= nil,
         }
         for _, sm in ipairs(m.subs) do
             vim.api.nvim_buf_set_extmark(bufnr, _ns_hl, row - 1, sm.s, {
@@ -665,15 +696,15 @@ end
 --- after every colorscheme change, both of which clear such links.
 function M.setup_highlights()
     local defaults = {
-        GreplaceLocation       = { link = "Directory" },
-        GreplaceBufferLocation = { link = "Special" },
-        GreplaceSeparator      = { link = "Comment" },
+        GreplaceLocation        = { link = "Directory" },
+        GreplaceBufferIndicator = { link = "Special" },
+        GreplaceSeparator       = { link = "Comment" },
         -- `Label` rather than `Search`: the panel is an ordinary buffer that
         -- is searched with `/` like any other, and painting the matches in
         -- `Search` would leave the query's own hits indistinguishable from
         -- them.
-        GreplaceMatch          = { link = "Label" },
-        GreplaceLimit          = { link = "WarningMsg" },
+        GreplaceMatch           = { link = "Label" },
+        GreplaceLimit           = { link = "WarningMsg" },
     }
     for name, def in pairs(defaults) do
         vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))

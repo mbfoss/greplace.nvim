@@ -35,6 +35,27 @@ local function buf_lines(path)
     return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 end
 
+--- The `file:line` chunk of an anchor's virtual text, found past the buffer
+--- indicator column that precedes it when a match came from an open buffer.
+---@param virt table[]
+---@return table
+local function location_chunk(virt)
+    for _, chunk in ipairs(virt) do
+        if chunk[2]:match("Location$") then return chunk end
+    end
+    error("no location chunk in " .. vim.inspect(virt))
+end
+
+--- The indicator an anchor draws in front of its location, trimmed, or `nil`
+--- when the panel has no indicator column.
+---@param virt table[]
+---@return string?
+local function indicator(virt)
+    for _, chunk in ipairs(virt) do
+        if chunk[2]:match("Indicator$") then return vim.trim(chunk[1]) end
+    end
+end
+
 --- The location each anchor is currently drawing, in buffer order, with a
 --- deleted line's anchor showing as `false`.
 ---@param bufnr integer
@@ -47,7 +68,7 @@ local function locations(bufnr)
         local virt = mark[4].virt_text
         -- An anchor pushed past the last line has nothing to draw on.
         out[i] = mark[2] < vim.api.nvim_buf_line_count(bufnr) and virt ~= nil
-            and virt[1][1] or false
+            and location_chunk(virt)[1] or false
     end
     return out
 end
@@ -127,7 +148,42 @@ describe("greplace", function()
         local marks = vim.api.nvim_buf_get_extmarks(pbuf, ns, 0, -1, { details = true })
         assert.equals(1, #marks)
         assert.equals("a.txt:1", marks[1][4].virt_text[1][1])
+        assert.is_nil(indicator(marks[1][4].virt_text))
         assert.is_false(vim.bo[pbuf].modified)
+    end)
+
+    it("marks matches from loaded buffers with an indicator", function()
+        write_file("a.txt", { "hit disk" })
+        local b = write_file("b.txt", { "hit loaded" })
+        local c = write_file("c.txt", { "hit old" })
+        assert(require("greplace.util").ensure_buf(b))
+        local cbuf = assert(require("greplace.util").ensure_buf(c))
+        -- Unsaved changes make no difference to the indicator.
+        vim.api.nvim_buf_set_lines(cbuf, 0, -1, false, { "hit modified" })
+
+        local pbuf  = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        local ns    = vim.api.nvim_get_namespaces()["greplace.anchor"]
+        local marks = vim.api.nvim_buf_get_extmarks(pbuf, ns, 0, -1, { details = true })
+        local got   = {}
+        for _, mark in ipairs(marks) do
+            local virt = mark[4].virt_text
+            got[location_chunk(virt)[1]] = indicator(virt)
+        end
+        assert.same({ ["a.txt:1"] = "", ["b.txt:1"] = "≡", ["c.txt:1"] = "≡" }, got)
+
+        -- Every row reserves the same width, so the locations stay aligned.
+        local widths = {}
+        for _, mark in ipairs(marks) do
+            widths[#widths + 1] = vim.fn.strdisplaywidth(mark[4].virt_text[1][1])
+        end
+        assert.same({ 2, 2, 2 }, widths)
+
+        -- The winbar counts the files drawn with the indicator.
+        assert.same({ files = 3, lines = 3, changes = 0, loaded = 2 }, panel.stats(pbuf))
+        local winbar = vim.wo[vim.fn.bufwinid(pbuf)].winbar
+        assert.is_truthy(winbar:find("≡ 2 open", 1, true))
     end)
 
     it("applies edits to buffers without touching disk", function()
@@ -292,20 +348,20 @@ describe("greplace", function()
         local bufnr = panel.open(run_search("hit"), {
             query = "hit", root = _root, height = 10, on_write = function() end,
         })
-        assert.same({ files = 2, lines = 3, changes = 0 }, panel.stats(bufnr))
+        assert.same({ files = 2, lines = 3, changes = 0, loaded = 0 }, panel.stats(bufnr))
 
         -- An edited line is one change.
         edit_row(bufnr, 0, { "HIT one" })
-        assert.same({ files = 2, lines = 3, changes = 1 }, panel.stats(bufnr))
+        assert.same({ files = 2, lines = 3, changes = 1, loaded = 0 }, panel.stats(bufnr))
 
         -- A region grown to several lines is still one changed match.
         edit_row(bufnr, 1, { "hit", "two" })
-        assert.same({ files = 2, lines = 3, changes = 2 }, panel.stats(bufnr))
+        assert.same({ files = 2, lines = 3, changes = 2, loaded = 0 }, panel.stats(bufnr))
 
         -- A removed line leaves every count, and takes its file with it when it
         -- was that file's last match.
         delete_row(bufnr, 3)
-        assert.same({ files = 1, lines = 2, changes = 2 }, panel.stats(bufnr))
+        assert.same({ files = 1, lines = 2, changes = 2, loaded = 0 }, panel.stats(bufnr))
     end)
 
     it("draws the counts in the panel's winbar", function()
@@ -319,6 +375,7 @@ describe("greplace", function()
         local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
         assert.is_truthy(winbar:find("1 file  1 line  0 changes", 1, true))
         assert.is_nil(winbar:find("hit", 1, true))
+        assert.is_nil(winbar:find("open", 1, true))
     end)
 
     it("says so in the winbar when the match limit cut the list short", function()
