@@ -67,14 +67,17 @@ local function on_write(bufnr)
 
     panel.refresh(bufnr, result.entries)
 
-    local msg   = string.format("%d line(s) in %d buffer(s), unsaved",
-        result.replaced, result.files)
-    local level = vim.log.levels.INFO
-    if result.removed > 0 then
-        msg = msg .. string.format("; %d left alone (removed from the list)", result.removed)
+    local msg
+    if result.replaced > 0 then
+        msg = string.format("%d line(s) changed in %d buffer(s)", result.replaced, result.files)
+    elseif result.skipped > 0 then
+        msg = "no changes applied"
+    else
+        msg = "no changes to apply"
     end
+    local level = vim.log.levels.INFO
     if result.skipped > 0 then
-        msg   = msg .. string.format("; %d skipped (source line moved)", result.skipped)
+        msg   = msg .. string.format("; %d skipped (source changed)", result.skipped)
         level = vim.log.levels.WARN
     end
     _notify(msg, level)
