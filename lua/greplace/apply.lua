@@ -28,6 +28,15 @@ local function line_at(bufnr, lnum)
     return vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
 end
 
+--- Whether a region asks for its source line to be rewritten: it is still
+--- listed, and no longer holds exactly the line it was rendered with.
+---@param region greplace.Region
+---@return boolean
+local function is_edit(region)
+    local lines = region.lines
+    return #lines > 0 and (#lines ~= 1 or lines[1] ~= region.entry.text)
+end
+
 --- Apply one file's regions, bottom-up so line numbers stay valid mid-pass,
 --- then restate each entry against the text now in the buffer.
 ---@param path    string
@@ -35,6 +44,21 @@ end
 ---@param result  greplace.ApplyResult
 ---@param keep    table<greplace.Region, boolean>  regions that survived
 local function apply_file(path, regions, result, keep)
+    -- A file none of whose lines were edited has nothing to write, so it is
+    -- not loaded just to find that out: a search over a large tree would
+    -- otherwise leave a buffer behind for every file it listed. Its matches
+    -- stay listed as rendered, bar those deleted from the panel.
+    if not vim.iter(regions):any(is_edit) then
+        for _, region in ipairs(regions) do
+            if #region.lines == 0 then
+                result.removed = result.removed + 1
+            else
+                keep[region] = true
+            end
+        end
+        return
+    end
+
     local bufnr, err = util.ensure_buf(path)
     if not bufnr then
         result.skipped = result.skipped + #regions
@@ -52,14 +76,13 @@ local function apply_file(path, regions, result, keep)
         local region = regions[i]
         local entry  = region.entry
         local lines  = region.lines
-        local changed = #lines ~= 1 or lines[1] ~= entry.text
 
         if #lines == 0 then
             -- The match was deleted from the panel, which takes it out of the
             -- replacement: the source line is left exactly as it is, and the
             -- match drops off the list rather than coming back on the redraw.
             result.removed = result.removed + 1
-        elseif not changed then
+        elseif not is_edit(region) then
             keep[region] = true
         elseif line_at(bufnr, entry.lnum) ~= entry.text then
             -- The file moved under the panel (an edit elsewhere, a reload).

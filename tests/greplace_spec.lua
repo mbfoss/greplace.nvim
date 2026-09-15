@@ -208,6 +208,31 @@ describe("greplace", function()
         assert.same({ "x", "hit two" }, vim.fn.readfile(b))
     end)
 
+    it("loads only the files that have an edited line", function()
+        local a = write_file("a.txt", { "hit one", "hit two" })
+        local b = write_file("b.txt", { "hit three" })
+        local c = write_file("c.txt", { "hit four" })
+        local util = require("greplace.util")
+
+        local pbuf = panel.open(run_search("hit"), {
+            query = "hit", root = _root, height = 10, on_write = function() end,
+        })
+        -- a.txt is edited, b.txt only has its match deleted, c.txt is untouched.
+        edit_row(pbuf, 0, { "HIT one" })
+        delete_row(pbuf, 2)
+
+        local result = apply.run(panel.regions(pbuf))
+        assert.equals(1, result.replaced)
+        assert.equals(1, result.files)
+        assert.equals(1, result.removed)
+        assert.same({ "HIT one", "hit two" }, buf_lines(a))
+        assert.is_nil(util.find_buf(b))
+        assert.is_nil(util.find_buf(c))
+        -- The untouched matches stay listed as they were.
+        assert.equals(3, #result.entries)
+        assert.equals("hit four", result.entries[3].text)
+    end)
+
     it("splits a source line when a region grows", function()
         local a = write_file("a.txt", { "one hit", "tail" })
         local pbuf = panel.open(run_search("hit"), {
@@ -265,7 +290,9 @@ describe("greplace", function()
         assert.same({ "a.txt:1", false }, locations(pbuf))
 
         local result = apply.run(panel.regions(pbuf))
-        assert.same({ "hit one", "hit two" }, buf_lines(a))
+        -- Nothing to write, so the file was not even loaded.
+        assert.is_nil(require("greplace.util").find_buf(a))
+        assert.same({ "hit one", "hit two" }, vim.fn.readfile(a))
         assert.equals(1, result.removed)
     end)
 
@@ -281,7 +308,8 @@ describe("greplace", function()
         assert.same({ false, false }, locations(pbuf))
 
         local result = apply.run(panel.regions(pbuf))
-        assert.same({ "hit one", "keep", "hit two" }, buf_lines(a))
+        assert.is_nil(require("greplace.util").find_buf(a))
+        assert.same({ "hit one", "keep", "hit two" }, vim.fn.readfile(a))
         assert.equals(0, result.replaced)
         assert.equals(2, result.removed)
         assert.equals(0, #result.entries)
