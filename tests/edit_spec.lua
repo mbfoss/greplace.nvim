@@ -83,6 +83,21 @@ function Child:markers()
     ]])
 end
 
+--- How many watches the panel has on its lines. Each one records a change of
+--- its own, and the pass that clears the record is scheduled, so it cannot run
+--- before this returns: the changes a single edit leaves behind are one per
+--- watch.
+---@return integer
+function Child:watches()
+    return self:lua([[
+        local buf = vim.api.nvim_get_current_buf()
+        local st  = require("greplace.panel").state(buf)
+        st.changes = {}
+        vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "probe" })
+        return #st.changes
+    ]])
+end
+
 --- Each anchor's row and column, and the location it draws (`false` for one
 --- whose line was removed), in buffer order: `"0,0 a.txt:1"`.
 ---@return string[]
@@ -276,6 +291,34 @@ describe("panel editing", function()
         assert.equals(buf, child:open({ "one", "two", "three" }))
         assert.same({ "one", "two", "three" }, child:lines())
         assert.same({ "0,0 a.txt:1", "1,0 a.txt:2", "2,0 a.txt:3" }, child:anchors())
+    end)
+
+    it("still watches the lines of a reloaded panel", function()
+        child:open({ "one", "two" })
+        child:feed(":edit!<CR>")
+        -- The reload empties the buffer, which is a change like any other:
+        -- whatever it does to the watch on the lines, the second list is
+        -- edited under the same rules as the first.
+        child:open({ "one", "two", "three" })
+        child:feed("jAX<Esc>")
+        assert.same({ "one", "twoX", "three" }, child:lines())
+        assert.equals(" • ", child:markers())
+        child:feed("dd")
+        assert.same({ "one", "three" }, child:lines())
+        assert.same({ "0,0 a.txt:1", "1,0 false", "1,0 a.txt:3" }, child:anchors())
+        child:feed("u")
+        assert.same({ "one", "twoX", "three" }, child:lines())
+    end)
+
+    it("watches a reloaded panel once, not twice", function()
+        child:open({ "one", "two" })
+        assert.equals(1, child:watches())
+        -- The reload detaches the watch and puts a new one in its place; the
+        -- one it detached must not come back with it. Two would record --
+        -- and act on -- every edit twice over.
+        child:feed(":edit!<CR>")
+        child:open({ "one", "two", "three" })
+        assert.equals(1, child:watches())
     end)
 
     it("does not ask to save unapplied edits on the way out", function()

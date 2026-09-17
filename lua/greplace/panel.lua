@@ -523,6 +523,11 @@ local function create_buf(on_write)
     local bufnr = vim.api.nvim_create_buf(false, false)
     vim.api.nvim_buf_set_name(bufnr, _NAME)
 
+    -- Defined with the line watch below, and called from the reload, which
+    -- detaches it.
+    ---@type fun()
+    local watch
+
     vim.bo[bufnr].buftype   = "acwrite"
     vim.bo[bufnr].bufhidden = "hide"
     vim.bo[bufnr].swapfile  = false
@@ -569,6 +574,7 @@ local function create_buf(on_write)
                     vim.wo[win].winbar = ""
                 end
             end
+            watch()
         end,
     })
     -- Unapplied edits must not turn into an "unsaved changes" prompt on the
@@ -608,55 +614,79 @@ local function create_buf(on_write)
     -- buffer's current numbering: every row a change since the last pass
     -- touched, and the row below, where the anchors of deleted lines land.
     ---@type integer[]?
-    local pending = nil
-    vim.api.nvim_buf_attach(bufnr, false, {
-        on_lines = function(_, _, _, first, last_old, last_new)
-            local state = _state[bufnr]
-            if not state then return true end -- detach with the panel
-            -- Keep the mirror in step, and note what the change replaced so
-            -- that `guard_lines` can put it back. A buffer emptied outright is
-            -- reported as holding no lines, though it keeps one empty line,
-            -- which the next change then reports replacing.
-            local mirror = state.lines
-            if mirror then
-                local old   = vim.list_slice(mirror, first + 1, last_old)
-                local count = last_new - first
-                splice(mirror, first, last_old,
-                    vim.api.nvim_buf_get_lines(bufnr, first, last_new, false))
-                if #mirror == 0 then mirror[1], count = "", 1 end
-                if not state.reverting then
-                    table.insert(state.changes, { first = first, count = count, old = old })
+    local pending  = nil
+    local attached = false
+    -- Watching the lines is not a one-off. `:edit` unloads the buffer before
+    -- `BufReadCmd` fills it again, and an unload detaches every listener on
+    -- it -- `on_detach`, not `on_reload`, a buffer read by `BufReadCmd` being
+    -- one Neovim does not offer a reload. The buffer itself survives, and the
+    -- next search reuses it rather than going back through `create_buf`, so
+    -- the reload has to attach again or the panel comes back unwatched: no
+    -- mirror, no guard, and no redraw behind an edit. Attaching twice would
+    -- be no better than not at all -- every change spliced into the mirror
+    -- and recorded twice over -- hence the flag rather than a second attach
+    -- on trust.
+    watch = function()
+        if attached then return end
+        attached = true
+        pending  = nil
+        vim.api.nvim_buf_attach(bufnr, false, {
+            on_detach = function() attached = false end,
+            on_lines = function(_, _, _, first, last_old, last_new)
+                -- Nothing to keep in step with: the list was thrown away by
+                -- a reload, and the lines left are no match's.
+                local state = _state[bufnr]
+                if not state then return end
+                -- Keep the mirror in step, and note what the change replaced so
+                -- that `guard_lines` can put it back. A buffer emptied outright is
+                -- reported as holding no lines, though it keeps one empty line,
+                -- which the next change then reports replacing.
+                local mirror = state.lines
+                if mirror then
+                    local old   = vim.list_slice(mirror, first + 1, last_old)
+                    local count = last_new - first
+                    splice(mirror, first, last_old,
+                        vim.api.nvim_buf_get_lines(bufnr, first, last_new, false))
+                    if #mirror == 0 then mirror[1], count = "", 1 end
+                    if not state.reverting then
+                        table.insert(state.changes, { first = first, count = count, old = old })
+                    end
                 end
-            end
 
-            if pending then
-                -- Rows below the change move with it; a row inside the lines
-                -- it replaced is now somewhere among the new ones.
-                local last = pending[2]
-                if last >= last_old then
-                    last = last + last_new - last_old
-                elseif last > first then
-                    last = last_new
+                if pending then
+                    -- Rows below the change move with it; a row inside the lines
+                    -- it replaced is now somewhere among the new ones.
+                    local last = pending[2]
+                    if last >= last_old then
+                        last = last + last_new - last_old
+                    elseif last > first then
+                        last = last_new
+                    end
+                    pending[1] = math.min(pending[1], first)
+                    pending[2] = math.max(last, last_new)
+                    return
                 end
-                pending[1] = math.min(pending[1], first)
-                pending[2] = math.max(last, last_new)
-                return
-            end
-            pending = { first, last_new }
-            vim.schedule(function()
-                local lo, hi = pending[1], pending[2]
-                pending = nil
-                local st = _state[bufnr]
-                if not st or not vim.api.nvim_buf_is_valid(bufnr) then return end
-                -- Before the redraw, which would record the broken state's
-                -- removed lines as the ones to keep hidden. A revert is a
-                -- change of its own, which gets a pass of its own.
-                if guard_lines(bufnr, lo, hi) then return end
-                redraw(bufnr, lo, hi)
-                if st.stats then set_winbar(bufnr) end
-            end)
-        end,
-    })
+                pending = { first, last_new }
+                vim.schedule(function()
+                    -- A reload between the change and this pass takes the
+                    -- rows to look at with it (`watch`), and leaves no list
+                    -- to look at them against either.
+                    if not pending then return end
+                    local lo, hi = pending[1], pending[2]
+                    pending = nil
+                    local st = _state[bufnr]
+                    if not st or not vim.api.nvim_buf_is_valid(bufnr) then return end
+                    -- Before the redraw, which would record the broken state's
+                    -- removed lines as the ones to keep hidden. A revert is a
+                    -- change of its own, which gets a pass of its own.
+                    if guard_lines(bufnr, lo, hi) then return end
+                    redraw(bufnr, lo, hi)
+                    if st.stats then set_winbar(bufnr) end
+                end)
+            end,
+        })
+    end
+    watch()
     vim.api.nvim_create_autocmd("BufWipeout", {
         buffer   = bufnr,
         callback = function()
