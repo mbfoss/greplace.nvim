@@ -45,7 +45,7 @@ from being undone.
 `setup()` is optional; the `:Gsearch` and `:Greplace` commands register
 themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 
-## Usage
+## Usage <!-- tag: usage -->
 
 | Command | Effect |
 | --- | --- |
@@ -68,7 +68,7 @@ written `\ ` per space and a literal backslash `\\`; every other backslash,
 `\d` and `\s` among them, stands for itself. A regex, a case rule or a
 narrowed file set is asked for with flags, below.
 
-### `:Greplace`: the panel itself
+### `:Greplace`: the panel <!-- tag: panel -->
 
 `:Greplace` never searches. With no subcommand, or with `open`, it puts the
 panel back on screen with the list and any unapplied edits it was holding.
@@ -77,7 +77,7 @@ keep the buffer, so showing it again brings back the same list rather than
 searching for it again. `qf` refills it, below. The subcommands tab-complete,
 and there is nothing to show until a search has filled the panel once.
 
-### `:Gsearch --flags`: searching with flags
+### `:Gsearch --flags`: searching <!-- tag: flags -->
 
 A `:Gsearch` line that opens with `--` is a flag line: flags first, then a bare
 `--`, then the query.
@@ -142,7 +142,7 @@ in. Both passes agree on that: the in-process globs are compiled to match the
 case rule the flag names, so a file is never filtered one way on disk and the
 other way in a buffer.
 
-### `:Greplace qf`: editing the quickfix list
+### `:Greplace qf`: quickfix import <!-- tag: qf -->
 
 `:Greplace qf` runs no search: it fills the panel from the quickfix list
 as it now stands, so whatever put entries there (`:grep`, `:vimgrep`, an
@@ -163,22 +163,30 @@ searching until the results replace it.
 Files that are open in a buffer are searched from their current, unsaved text,
 not from disk; their locations are marked with `≡`.
 
-### Mappings
+### Mappings <!-- tag: keymaps -->
 
 | Key | Effect |
 | --- | --- |
 | `<CR>` | open the source of the line under the cursor, at that line and column |
 | `K` | show the match under the cursor in a floating window: its full path, relative path, line number, whether it is already loaded in a buffer, and the source line as the panel rendered it |
+| `]c` | move to the next edited line |
+| `[c` | move to the previous edited line |
 
 The file opens in a regular window: the panel keeps its own, and is never
 opened over. Set `keys.open` or `keys.hover` to a different key, or to `false`,
 to change or drop either mapping.
 
+`]c` and `[c` step through the lines marked `•`, as they do in a diff, and take
+a count: `3]c` moves three edits along, and a count larger than the edits left
+stops at the last one rather than going nowhere. Each is a jump, so `''` and
+`<C-o>` come back. They are fixed, not configurable: they belong to the panel's
+buffer alone, and nothing else is bound to them there.
+
 The `file:line` column is capped at `path_width` display cells; a longer
 location is cropped on the left, keeping the file name and line number visible.
 `K` is how you see the whole path.
 
-### Editing rules
+### Editing rules <!-- tag: editing -->
 
 The anchor in front of a line owns everything from that line down to the next
 anchor, which makes the obvious edits mean the obvious thing:
@@ -207,7 +215,7 @@ A line whose source has moved since the search (an edit elsewhere, a reload) is
 left untouched and reported as skipped. After a write the panel re-renders with
 the applied text and corrected line numbers.
 
-## Configuration
+## Configuration <!-- tag: configuration -->
 
 ```lua
 require("greplace").setup({
@@ -223,7 +231,7 @@ require("greplace").setup({
 })
 ```
 
-## Health
+## Health <!-- tag: health -->
 
 ```vim
 :checkhealth greplace
@@ -234,7 +242,7 @@ name greplace does not define is reported as a warning: `setup()` merges the
 table you pass wholesale, so a misspelled one would otherwise be accepted in
 silence.
 
-## Highlight groups
+## Highlight groups <!-- tag: highlights -->
 
 | Group | Default | Meaning |
 | --- | --- | --- |
@@ -246,7 +254,9 @@ silence.
 | `GreplaceLimit` | `WarningMsg` | the winbar's "limit of N reached" note |
 | `GreplaceChanged` | `Changed` | the `•` in front of the `│` of an edited line |
 
-## Development
+<!-- panvimdoc-ignore-start -->
+
+## Development 
 
 ```bash
 make test
@@ -261,3 +271,5 @@ it is missing rather than installing anything.
 ## License
 
 MIT
+
+<!-- panvimdoc-ignore-end -->

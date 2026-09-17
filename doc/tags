@@ -1,0 +1,12 @@
+greplace	greplace.txt	/*greplace*
+greplace-configuration	greplace.txt	/*greplace-configuration*
+greplace-editing	greplace.txt	/*greplace-editing*
+greplace-flags	greplace.txt	/*greplace-flags*
+greplace-health	greplace.txt	/*greplace-health*
+greplace-highlights	greplace.txt	/*greplace-highlights*
+greplace-installation	greplace.txt	/*greplace-installation*
+greplace-keymaps	greplace.txt	/*greplace-keymaps*
+greplace-panel	greplace.txt	/*greplace-panel*
+greplace-qf	greplace.txt	/*greplace-qf*
+greplace-table-of-contents	greplace.txt	/*greplace-table-of-contents*
+greplace-usage	greplace.txt	/*greplace-usage*

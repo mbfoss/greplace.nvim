@@ -494,6 +494,61 @@ local function hover(bufnr)
     })
 end
 
+--- Move to the edited line nearest the cursor in the direction `dir`, the way
+--- `]c`/`[c` step through a diff. `v:count1` times over, so `3]c` moves three
+--- edits along; a count that runs off the end stops at the last edit there is
+--- rather than going nowhere, which is what makes a large count a way to reach
+--- the end of the list.
+---@param bufnr integer
+---@param dir   integer  1 forwards, -1 backwards
+local function goto_change(bufnr, dir)
+    local state = _state[bufnr]
+    if not state then return end
+    if not state.stats or state.stats.changes == 0 then
+        vim.notify("greplace: nothing has been edited", vim.log.levels.WARN)
+        return
+    end
+
+    local row  = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local last = vim.api.nvim_buf_line_count(bufnr) - 1
+    -- Strictly past the cursor: sitting on an edit, `]c` moves off it rather
+    -- than staying put. With no row left on that side there is nothing to ask
+    -- for, and asking anyway would be a range starting outside the buffer.
+    if (dir > 0 and row >= last) or (dir < 0 and row <= 0) then
+        vim.notify("greplace: no more edits", vim.log.levels.WARN)
+        return
+    end
+
+    -- Walked from the cursor rather than gathered and sorted: the anchors come
+    -- back in the order they are asked for, so the first edited one found is
+    -- the one to move to, and a panel holding thousands of matches is only
+    -- walked as far as the next edit. `state.changed` is keyed by anchor, and
+    -- an anchor's row is where its line begins, so the row it gives is the
+    -- edited line itself. Deleting a line leaves its anchor on the row of the
+    -- next one, so an edited row can be reached twice over; being in order,
+    -- those repeats are neighbours, and comparing against the row in hand is
+    -- enough to count it once.
+    local from = dir > 0 and { row + 1, 0 } or { row - 1, -1 }
+    local to   = dir > 0 and -1 or 0
+    local left, target = vim.v.count1, nil
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, from, to, {})) do
+        if state.changed[mark[1]] and mark[2] ~= target then
+            target = mark[2]
+            left   = left - 1
+            -- The rest of the walk is what a count asked for; the edits beyond
+            -- it are no business of this one.
+            if left == 0 then break end
+        end
+    end
+    if not target then
+        vim.notify("greplace: no more edits", vim.log.levels.WARN)
+        return
+    end
+    -- A jump, so `''` and `<C-o>` come back to where the cursor was.
+    vim.cmd("normal! m'")
+    vim.api.nvim_win_set_cursor(0, { target + 1, 0 })
+end
+
 --- Replace `list[first + 1 .. last]` with `new`, in place: the tail is shifted
 --- once, so a change that adds or removes lines allocates no second copy of a
 --- list as long as the panel.
@@ -604,6 +659,17 @@ local function create_buf(on_write)
             desc   = "greplace: show the full details of the match under the cursor",
         })
     end
+    -- Not among `config.keys`: `]c`/`[c` mean "the next change" wherever they
+    -- are bound, and they are the panel's own, taking nothing a user might
+    -- want back -- unlike `<CR>` and `K`.
+    vim.keymap.set("n", "]c", function() goto_change(bufnr, 1) end, {
+        buffer = bufnr,
+        desc   = "greplace: move to the next edited line",
+    })
+    vim.keymap.set("n", "[c", function() goto_change(bufnr, -1) end, {
+        buffer = bufnr,
+        desc   = "greplace: move to the previous edited line",
+    })
 
     -- `on_lines` rather than `TextChanged`: it catches every kind of change,
     -- including one made from a mapping or a script mid-command, and it fires

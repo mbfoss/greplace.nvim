@@ -321,6 +321,80 @@ describe("panel editing", function()
         assert.equals(1, child:watches())
     end)
 
+    it("steps between the edited lines with ]c and [c", function()
+        child:open({ "one", "two", "three", "four", "five" })
+        child:feed("jAX<Esc>")   -- line 2
+        child:feed("3jAY<Esc>")  -- line 5
+        assert.equals(" •  •", child:markers())
+
+        child:feed("gg0]c")
+        assert.same({ 2, 0 }, child:cursor())
+        -- Off the edit it is sitting on, not stuck on it.
+        child:feed("]c")
+        assert.same({ 5, 0 }, child:cursor())
+        child:feed("[c")
+        assert.same({ 2, 0 }, child:cursor())
+        -- And back to where the stepping began.
+        child:feed("''")
+        assert.same({ 5, 0 }, child:cursor())
+    end)
+
+    it("takes a count on ]c, stopping at the last edit", function()
+        child:open({ "one", "two", "three", "four", "five" })
+        child:feed("jAX<Esc>")
+        child:feed("jAY<Esc>")
+        child:feed("jAZ<Esc>")
+        child:feed("gg02]c")
+        assert.same({ 3, 0 }, child:cursor())
+        -- More edits asked for than there are left: the last one, rather than
+        -- nowhere at all.
+        child:feed("gg09]c")
+        assert.same({ 4, 0 }, child:cursor())
+    end)
+
+    it("says so when there is no edit to step to", function()
+        child:open({ "one", "two", "three" })
+        child:feed("gg0]c")
+        assert.same({ 1, 0 }, child:cursor())
+        assert.same({ "greplace: nothing has been edited" }, child:notes())
+
+        child:feed("jAX<Esc>")
+        -- Past the only edit there is, in both directions: the cursor stays
+        -- where it was rather than being taken to the end of the list.
+        child:feed("]c")
+        assert.same({ 2, 3 }, child:cursor())
+        child:feed("gg0[c")
+        assert.same({ 1, 0 }, child:cursor())
+        assert.same({
+            "greplace: nothing has been edited",
+            "greplace: no more edits",
+            "greplace: no more edits",
+        }, child:notes())
+    end)
+
+    it("counts an edited row once when a deleted line shares it", function()
+        child:open({ "one", "two", "three", "four", "five" })
+        child:feed("jAX<Esc>")   -- line 2
+        child:feed("GAY<Esc>")   -- line 5
+        -- Line 4 goes, leaving its anchor on the row line 5 now occupies: two
+        -- anchors on one edited row, which is still one edit to step to.
+        child:feed("3Gjdd")
+        assert.same({ "one", "twoX", "three", "fiveY" }, child:lines())
+        child:feed("gg02]c")
+        assert.same({ 4, 0 }, child:cursor())
+        child:feed("2[c")
+        assert.same({ 2, 0 }, child:cursor())
+    end)
+
+    it("forgets an edit that has been undone", function()
+        child:open({ "one", "two", "three" })
+        child:feed("jAX<Esc>")
+        child:feed("u")
+        child:feed("gg0]c")
+        assert.same({ 1, 0 }, child:cursor())
+        assert.same({ "greplace: nothing has been edited" }, child:notes())
+    end)
+
     it("does not ask to save unapplied edits on the way out", function()
         child:open({ "one", "two" })
         child:feed("AX<Esc>")
