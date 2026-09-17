@@ -65,7 +65,11 @@ local function on_write(bufnr)
     local apply  = require("greplace.apply")
     local result = apply.run(panel.regions(bufnr))
 
-    panel.refresh(bufnr, result.entries)
+    local render_err = panel.refresh(bufnr, result.entries)
+    if render_err then
+        _notify("could not redraw the list: " .. render_err, vim.log.levels.ERROR)
+        return
+    end
 
     local msg
     if result.replaced > 0 then
@@ -141,7 +145,10 @@ function M.open(query, opts)
                 end
                 if not live then return end
                 args.truncated = truncated
-                panel.open(matches, args)
+                local _, render_err = panel.open(matches, args)
+                if render_err then
+                    _notify(render_err, vim.log.levels.ERROR)
+                end
             end)
         end)
 end
@@ -161,13 +168,17 @@ function M.open_qf()
 
     -- A search still filling this same panel would land on top of the list.
     abort()
-    panel.open(matches, {
+    local _, render_err = panel.open(matches, {
         query    = "quickfix list",
         source   = "quickfix",
         root     = root,
         height   = config.height,
         on_write = on_write,
     })
+    if render_err then
+        _notify(render_err, vim.log.levels.ERROR)
+        return
+    end
 
     if dropped > 0 then
         _notify(("%d quickfix entr%s skipped (no file, or line not readable)")

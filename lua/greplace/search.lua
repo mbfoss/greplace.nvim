@@ -46,10 +46,26 @@ local function parse_match(line, root)
     local path = data.path and data.path.text
     if not path then return end
 
-    local text = (data.lines.text or ""):gsub("\r?\n$", "")
+    -- rg reports a line it could not decode as UTF-8 as `bytes` (base64)
+    -- instead of `text`. There is no line for us to show or edit then, and the
+    -- submatch offsets would index a string we do not have, so the match is
+    -- dropped rather than rendered against an empty line.
+    local raw = data.lines and data.lines.text
+    if type(raw) ~= "string" then return end
+
+    local text = raw:gsub("\r?\n$", "")
+    local len  = #text
     local subs = {}
     for _, sm in ipairs(data.submatches or {}) do
-        subs[#subs + 1] = { s = sm.start, e = sm["end"] }
+        -- Offsets are byte indices into the line as rg read it, which still
+        -- carries its line terminator: a match that ran to the end of the line
+        -- (`$`, `\s+`, ...) reaches past the text we kept. Clamp both ends to
+        -- it, and drop what is left of a submatch that lies entirely in the
+        -- stripped terminator -- an out-of-range column is rejected when the
+        -- highlight is placed.
+        local s = math.max(0, math.min(tonumber(sm.start) or 0, len))
+        local e = math.max(s, math.min(tonumber(sm["end"]) or 0, len))
+        if e > s then subs[#subs + 1] = { s = s, e = e } end
     end
 
     -- rg prints paths relative to its own cwd, which is the search root, not

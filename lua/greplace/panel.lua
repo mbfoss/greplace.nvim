@@ -756,13 +756,22 @@ local function render(bufnr, matches)
                 "GreplaceBufferIndicator",
             })
         end
-        local id       = vim.api.nvim_buf_set_extmark(bufnr, _ns, row - 1, 0, {
+        local ok, id   = pcall(vim.api.nvim_buf_set_extmark, bufnr, _ns, row - 1, 0, {
             virt_text     = virt,
             virt_text_pos = "inline",
             -- Text typed at the start of a line belongs after the location, so
             -- the anchor must not drift right with it.
             right_gravity = false,
         })
+        -- An anchor that could not be placed would silently drop its match from
+        -- the list the panel writes back, and every later row would still look
+        -- fine -- so the whole render is abandoned instead, and the caller says
+        -- so. Half a result set is worse than none: the user would edit it
+        -- believing it was all of them.
+        if not ok then
+            error(string.format("%s:%d: could not anchor result: %s",
+                m.relpath, m.lnum, tostring(id)), 0)
+        end
         state.virt[id]    = virt
         state.hidden[id]  = false
         state.entries[id] = {
@@ -772,11 +781,25 @@ local function render(bufnr, matches)
             text    = m.text,
         }
         tally(state, id, 1)
+        -- Both ends are clamped, not just the end one: a match span can start
+        -- past the line we kept (rg counts the line terminator it stripped,
+        -- and a `$`-anchored pattern lands there), and an out-of-range start
+        -- column is an error, not a no-op.
+        local len = #m.text
         for _, sm in ipairs(m.subs) do
-            vim.api.nvim_buf_set_extmark(bufnr, _ns_hl, row - 1, sm.s, {
-                end_col  = math.min(sm.e, #m.text),
-                hl_group = "GreplaceMatch",
-            })
+            local s = math.max(0, math.min(sm.s, len))
+            local e = math.max(s, math.min(sm.e, len))
+            if e > s then
+                local hl_ok, hl_err = pcall(vim.api.nvim_buf_set_extmark,
+                    bufnr, _ns_hl, row - 1, s, {
+                        end_col  = e,
+                        hl_group = "GreplaceMatch",
+                    })
+                if not hl_ok then
+                    error(string.format("%s:%d: could not highlight match at %d-%d: %s",
+                        m.relpath, m.lnum, s, e, tostring(hl_err)), 0)
+                end
+            end
         end
     end
 
@@ -850,6 +873,8 @@ end
 ---@param matches  greplace.Match[]
 ---@param opts     { query:string, root:string, flags:table?, height:integer, truncated:boolean?, source:string?, on_write:fun(bufnr:integer) }
 ---@return integer bufnr
+---@return string? err  the list could not be rendered; the panel shows why and
+---                     holds nothing editable
 function M.open(matches, opts)
     local bufnr = M.find_buf() or create_buf(opts.on_write)
     _state[bufnr] = {
@@ -867,7 +892,14 @@ function M.open(matches, opts)
         changes   = {},
     }
     show(bufnr, opts.height)
-    render(bufnr, matches)
+    local ok, err = pcall(render, bufnr, matches)
+    if not ok then
+        -- Leave the panel holding the error rather than a list that is missing
+        -- rows without saying which: `set_status` also makes it unmodifiable,
+        -- so nothing can be written back from a render that did not finish.
+        M.set_message(bufnr, "render failed: " .. tostring(err), "ErrorMsg")
+        return bufnr, tostring(err)
+    end
     return bufnr
 end
 
@@ -875,6 +907,7 @@ end
 --- and line numbers match the buffers again.
 ---@param bufnr   integer
 ---@param entries greplace.Entry[]  in display order
+---@return string? err  as `M.open`
 function M.refresh(bufnr, entries)
     local matches = {} ---@type greplace.Match[]
     for i, e in ipairs(entries) do
@@ -887,7 +920,11 @@ function M.refresh(bufnr, entries)
             bufnr   = util.find_buf(e.path),
         }
     end
-    render(bufnr, matches)
+    local ok, err = pcall(render, bufnr, matches)
+    if not ok then
+        M.set_message(bufnr, "render failed: " .. tostring(err), "ErrorMsg")
+        return tostring(err)
+    end
 end
 
 --- Read the edited buffer back as one replacement region per anchor: the lines
