@@ -537,7 +537,54 @@ local function create_buf(on_write)
         -- and hence no syntax, treesitter or LSP -- and stay that way, being
         -- already loaded by the time the user opens one.
         nested = true,
-        callback = function() on_write(bufnr) end,
+        callback = function()
+            -- Nothing to apply once the buffer no longer holds a list -- it
+            -- was reloaded out from under the panel (see `BufReadCmd`), and
+            -- its lines belong to no match.
+            if not _state[bufnr] then
+                vim.bo[bufnr].modified = false
+                return
+            end
+            on_write(bufnr)
+        end,
+    })
+    -- `:edit` reloads the buffer: Neovim empties it and leaves the filling to
+    -- `BufReadCmd`. There is no file behind `greplace://replace` to fill it
+    -- from -- the panel is only ever written into by a search -- so the reload
+    -- leaves it empty, and everything drawn on the list it held goes with it.
+    -- Left behind, the anchors would all collapse onto the one remaining row
+    -- and draw every `file:line` in the panel stacked on it, and a write would
+    -- take that row's text for all of their matches.
+    vim.api.nvim_create_autocmd("BufReadCmd", {
+        buffer = bufnr,
+        desc   = "greplace: a reload leaves an empty panel, not a stale one",
+        callback = function()
+            _state[bufnr] = nil
+            vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
+            vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+            vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
+            vim.bo[bufnr].modifiable = true
+            for _, win in ipairs(vim.api.nvim_list_wins()) do
+                if vim.api.nvim_win_get_buf(win) == bufnr then
+                    vim.wo[win].winbar = ""
+                end
+            end
+        end,
+    })
+    -- Unapplied edits must not turn into an "unsaved changes" prompt on the
+    -- way out of Neovim: writing the panel rewrites source files, which is not
+    -- a question to answer at that point -- and answering "yes" there would
+    -- apply the edits to buffers that are about to be discarded. The panel is
+    -- dropped instead, like the scratch buffer it is.
+    local group = vim.api.nvim_create_augroup("greplace.panel." .. bufnr, { clear = true })
+    vim.api.nvim_create_autocmd("ExitPre", {
+        group = group,
+        desc  = "greplace: never prompt to save the panel on exit",
+        callback = function()
+            if vim.api.nvim_buf_is_valid(bufnr) then
+                vim.bo[bufnr].modified = false
+            end
+        end,
     })
     if config.keys.open and config.keys.open ~= "" then
         vim.keymap.set("n", config.keys.open, function() jump(bufnr) end, {
@@ -612,7 +659,10 @@ local function create_buf(on_write)
     })
     vim.api.nvim_create_autocmd("BufWipeout", {
         buffer   = bufnr,
-        callback = function() _state[bufnr] = nil end,
+        callback = function()
+            _state[bufnr] = nil
+            pcall(vim.api.nvim_del_augroup_by_id, group)
+        end,
     })
     return bufnr
 end

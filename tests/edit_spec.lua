@@ -250,6 +250,43 @@ describe("panel editing", function()
         assert.same({}, child:notes())
     end)
 
+    it("leaves nothing of the old list behind when reloaded", function()
+        child:open({ "one", "two", "three" })
+        child:feed("jAX<Esc>")
+        -- The panel is not a file: there is nothing to reload it from, and an
+        -- unwritten edit stands in the way of throwing the list away.
+        assert.is_true(child:lua("return vim.bo.modified"))
+        assert.is_false(child:lua("return pcall(vim.cmd, 'edit')"))
+        assert.same({ "one", "twoX", "three" }, child:lines())
+
+        child:feed(":edit!<CR>")
+        assert.same({ "" }, child:lines())
+        assert.same({}, child:anchors())
+        assert.is_false(child:lua("return require('greplace.panel').is_panel(0)"))
+        assert.equals("", child:lua("return vim.wo.winbar"))
+        -- And a write of what is left replaces nothing.
+        child:feed(":write<CR>")
+        assert.same({}, child:notes())
+        assert.is_false(child:lua("return vim.bo.modified"))
+    end)
+
+    it("takes a new list in a reloaded panel", function()
+        local buf = child:open({ "one", "two" })
+        child:feed(":edit!<CR>")
+        assert.equals(buf, child:open({ "one", "two", "three" }))
+        assert.same({ "one", "two", "three" }, child:lines())
+        assert.same({ "0,0 a.txt:1", "1,0 a.txt:2", "2,0 a.txt:3" }, child:anchors())
+    end)
+
+    it("does not ask to save unapplied edits on the way out", function()
+        child:open({ "one", "two" })
+        child:feed("AX<Esc>")
+        assert.is_true(child:lua("return vim.bo.modified"))
+        -- A prompt (or E37) would leave the child running instead.
+        vim.rpcnotify(child.chan, "nvim_input", ":qall<CR>")
+        assert.same({ 0 }, vim.fn.jobwait({ child.chan }, 5000))
+    end)
+
     it("marks the lines that have been changed", function()
         child:open({ "one", "two", "three" })
         assert.equals("   ", child:markers())
