@@ -223,6 +223,17 @@ require("greplace").setup({
 })
 ```
 
+## Health
+
+```vim
+:checkhealth greplace
+```
+
+Reports the commands and the options that differ from the defaults. An option
+name greplace does not define is reported as a warning: `setup()` merges the
+table you pass wholesale, so a misspelled one would otherwise be accepted in
+silence.
+
 ## Highlight groups
 
 | Group | Default | Meaning |
