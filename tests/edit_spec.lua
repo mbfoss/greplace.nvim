@@ -68,7 +68,7 @@ function Child:lines()
     return self:lua("return vim.api.nvim_buf_get_lines(0, 0, -1, false)")
 end
 
---- Which rows carry the changed marker in front of their `│`: `"●"`, or `" "`
+--- Which rows carry the changed marker in front of their `│`: `"•"`, or `" "`
 --- for one that does not.
 ---@return string
 function Child:markers()
@@ -254,12 +254,12 @@ describe("panel editing", function()
         child:open({ "one", "two", "three" })
         assert.equals("   ", child:markers())
         child:feed("jAX<Esc>")
-        assert.equals(" ● ", child:markers())
+        assert.equals(" • ", child:markers())
         -- The mark goes with its line, and comes back with it.
         child:feed("dd")
         assert.equals("  ", child:markers())
         child:feed("u")
-        assert.equals(" ● ", child:markers())
+        assert.equals(" • ", child:markers())
         -- Edited back to what it was, the line is no longer a change.
         child:feed("u")
         assert.equals("   ", child:markers())

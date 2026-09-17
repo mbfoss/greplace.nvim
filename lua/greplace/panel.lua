@@ -34,7 +34,7 @@ local _buffer_indicator = "≡ "
 -- Drawn in front of the `│` of a match whose line has been edited, so that the
 -- lines a write would rewrite stand out from the column alone. Every row
 -- reserves its width, so the `│` stays aligned whichever rows carry it.
-local _changed_marker = "●"
+local _changed_marker = "•"
 local _no_marker      = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker))
 
 -- The panel opens the moment a search is triggered, before there is anything
@@ -413,7 +413,7 @@ local function set_winbar(bufnr, status)
 
     -- Trailing `%=` so the text sits left and the highlight does not run on
     -- past it.
-    local bar = string.format(" %%#GreplaceSeparator#%s%s%%=", text, limit)
+    local bar = string.format(" %%#GreplaceStatus#%s%s%%=", text, limit)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(win) == bufnr then
             vim.wo[win].winbar = bar
@@ -753,7 +753,7 @@ local function render(bufnr, matches)
             { location,          "GreplaceLocation" },
             { pad .. " ",        "GreplaceSeparator" },
             { _no_marker,        "GreplaceChanged" },
-            { " │ ",             "GreplaceSeparator" },
+            { "│ ",              "GreplaceSeparator" },
         }
         if indicator then
             table.insert(virt, 1, {
@@ -843,7 +843,7 @@ end
 function M.set_message(bufnr, msg, hl)
     if not _state[bufnr] then return end
     _state[bufnr].message = msg
-    set_status(bufnr, { { msg, hl or "GreplaceSeparator" } })
+    set_status(bufnr, { { msg, hl or "GreplaceStatus" } })
     set_winbar(bufnr, msg)
 end
 
@@ -868,9 +868,9 @@ function M.open_loading(opts)
     show(bufnr, opts.height)
     set_winbar(bufnr, "searching ...")
     set_status(bufnr, {
-        { "searching for ", "GreplaceSeparator" },
+        { "searching for ", "GreplaceStatus" },
         { opts.query,       "GreplaceMatch" },
-        { " ...",           "GreplaceSeparator" },
+        { " ...",           "GreplaceStatus" },
     })
     return bufnr
 end
@@ -976,14 +976,20 @@ function M.setup_highlights()
     local defaults = {
         GreplaceLocation        = { link = "Directory" },
         GreplaceBufferIndicator = { link = "Special" },
-        GreplaceSeparator       = { link = "Comment" },
+        -- `NonText` rather than `Comment`: the plain `│` is scaffolding, and
+        -- the dimmer it is, the more the `│` of an edited line stands out.
+        GreplaceSeparator       = { link = "NonText" },
+        -- The winbar's counts and the panel's status are words to read rather
+        -- than scaffolding, so they keep `Comment` instead of following the
+        -- separator down to `NonText`.
+        GreplaceStatus          = { link = "Comment" },
         -- `Label` rather than `Search`: the panel is an ordinary buffer that
         -- is searched with `/` like any other, and painting the matches in
         -- `Search` would leave the query's own hits indistinguishable from
         -- them.
         GreplaceMatch           = { link = "Label" },
         GreplaceLimit           = { link = "WarningMsg" },
-        GreplaceChanged         = { link = "Changed" },
+        GreplaceChanged         = { link = "NonText" },
     }
     for name, def in pairs(defaults) do
         vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))

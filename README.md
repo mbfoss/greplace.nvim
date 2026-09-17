@@ -201,7 +201,7 @@ A match is one source line and stays one line in the panel. The lines a change
 added or joined are put back as they were, and the cursor stays where the break
 was; in Insert mode you stay in Insert mode.
 
-An edited line is marked with a `●` in front of its `│`.
+An edited line is marked with a `•` in front of its `│`.
 
 A line whose source has moved since the search (an edit elsewhere, a reload) is
 left untouched and reported as skipped. After a write the panel re-renders with
@@ -240,10 +240,11 @@ silence.
 | --- | --- | --- |
 | `GreplaceLocation` | `Directory` | `file:line` of a match |
 | `GreplaceBufferIndicator` | `Special` | the `≡` in front of a match from an open buffer |
-| `GreplaceSeparator` | `Comment` | the `│` between location and text |
+| `GreplaceSeparator` | `NonText` | the `│` between location and text |
+| `GreplaceStatus` | `Comment` | the winbar's counts and the panel's status text |
 | `GreplaceMatch` | `Label` | the matched text itself |
 | `GreplaceLimit` | `WarningMsg` | the winbar's "limit of N reached" note |
-| `GreplaceChanged` | `Changed` | the `●` in front of the `│` of an edited line |
+| `GreplaceChanged` | `Changed` | the `•` in front of the `│` of an edited line |
 
 ## Development
 
