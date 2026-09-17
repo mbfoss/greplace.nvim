@@ -237,6 +237,20 @@ local function compile_type_globs(types)
     return compile_globs(include), compile_globs(exclude)
 end
 
+--- Whether rg would call a root-relative path hidden: any component of it is a
+--- dotfile. rg skips such a file and does not descend into such a directory
+--- unless `--hidden` says otherwise -- so without this the buffer pass reports
+--- matches from a `.env` or a `.git/` file that the disk pass never looked at,
+--- and which of the two happens depends only on what the user has open.
+---@param relpath string
+---@return boolean
+local function is_hidden(relpath)
+    for part in vim.gsplit(relpath, "/", { plain = true }) do
+        if part:sub(1, 1) == "." then return true end
+    end
+    return false
+end
+
 --- A predicate over root-relative paths standing for the file-selection flags,
 --- for filtering open buffers the way rg filters the working tree. Compiling
 --- the globs once per search rather than once per buffer is the point of
@@ -250,6 +264,14 @@ function M.buffer_filter(flags)
 
     return function(relpath)
         local base = vim.fs.basename(relpath)
+        -- A `--glob` that matches is rg's own override: it whitelists the file
+        -- past the hidden rule, so `-g .env` finds `.env` with no `--hidden`.
+        -- `--type` carries no such override, and neither does a glob that only
+        -- excludes -- both leave the hidden rule standing.
+        if not flags.hidden and is_hidden(relpath)
+            and not (include and strutil.any_match(relpath, include)) then
+            return false
+        end
         return strutil.check_path_pattern(relpath, false, include, exclude)
             and strutil.check_path_pattern(base, false, type_include, type_exclude)
             and (not max_depth or select(2, relpath:gsub("/", "")) < max_depth)
@@ -335,6 +357,14 @@ function M.parse(fargs)
             end
         end
         i = i + 1
+    end
+
+    -- The one flag whose value has to be a number. `file_args` drops a value it
+    -- cannot read, which would leave the search running over the whole tree
+    -- with nothing said -- while every other malformed flag line is reported.
+    local depth = flags["max-depth"]
+    if depth and not depth:match("^%d+$") then
+        return nil, ("--max-depth needs a whole number, not `%s`"):format(depth)
     end
 
     return { flags = flags, query = query }

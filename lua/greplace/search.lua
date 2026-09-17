@@ -35,10 +35,34 @@ local rgflags = require("greplace.rgflags")
 ---@field path  string
 ---@field lines string[]
 
+--- The absolute path as `util.resolve` spells it, symlinks and all, so that a
+--- match and the buffer holding the same file compare equal. rg does not
+--- resolve what it prints, so under `--follow` a file reached through a link
+--- would otherwise miss the open-buffer dedup below: the panel would list that
+--- line twice, and the write would open a second buffer on a file it already
+--- had one for.
+---
+--- `util.resolve` itself cannot be used here: this runs in a libuv read
+--- callback, where `vim.fn` is off limits. `vim.uv.fs_realpath` is the same
+--- syscall without it, and the path is already absolute, so `:p` has nothing
+--- left to do. Cached per search -- one realpath per distinct file rather than
+--- one per match.
+---@param abs  string  absolute
+---@param real table<string, string>  the search's cache
+---@return string
+local function resolve_path(abs, real)
+    local hit = real[abs]
+    if hit then return hit end
+    local resolved = vim.fs.normalize(vim.uv.fs_realpath(abs) or abs)
+    real[abs] = resolved
+    return resolved
+end
+
 ---@param line string
 ---@param root string
+---@param real table<string, string>  realpath cache, shared across the search
 ---@return greplace.Match?
-local function parse_match(line, root)
+local function parse_match(line, root, real)
     local ok, decoded = pcall(vim.json.decode, line)
     if not ok or type(decoded) ~= "table" or decoded.type ~= "match" then return end
 
@@ -74,7 +98,7 @@ local function parse_match(line, root)
     if not vim.startswith(abs, "/") then
         abs = root .. "/" .. abs:gsub("^%./", "")
     end
-    abs = vim.fs.normalize(abs)
+    abs = resolve_path(abs, real)
     return {
         path    = abs,
         relpath = M.relative_path(abs, root),
@@ -188,11 +212,12 @@ end
 --- the trailing partial line is carried over to the next chunk.
 ---@param cmd   string[]
 ---@param root  string
+---@param real  table<string, string>  the search's realpath cache
 ---@param stdin string?  text to feed rg's `-` target, if any
 ---@param sink  fun(m:greplace.Match)
 ---@param done  fun(err:string?)
 ---@return greplace.util.SpawnHandle?
-local function rg_json(cmd, root, stdin, sink, done)
+local function rg_json(cmd, root, real, stdin, sink, done)
     local rest, errbuf = "", {}
 
     local function feed(chunk, last)
@@ -201,13 +226,13 @@ local function rg_json(cmd, root, stdin, sink, done)
         while true do
             local nl = rest:find("\n", from, true)
             if not nl then break end
-            local m = parse_match(rest:sub(from, nl - 1), root)
+            local m = parse_match(rest:sub(from, nl - 1), root, real)
             if m then sink(m) end
             from = nl + 1
         end
         rest = rest:sub(from)
         if last and rest ~= "" then
-            local m = parse_match(rest, root)
+            local m = parse_match(rest, root, real)
             if m then sink(m) end
             rest = ""
         end
@@ -220,8 +245,14 @@ local function rg_json(cmd, root, stdin, sink, done)
         stderr = function(data) errbuf[#errbuf + 1] = data end,
     }, function(code)
         feed("", true)
-        -- rg exits 1 when nothing matched, which is not an error here.
-        if code > 1 then
+        -- rg exits 1 when nothing matched, which is not an error here. A
+        -- negative code is not rg's at all: the process never started (a
+        -- search root that does not exist, rg gone from $PATH since the check
+        -- that found it), and letting that read as a clean exit would have the
+        -- panel report "no matches" for a search that never ran.
+        if code < 0 then
+            done(("could not run %s in %s"):format(cmd[1], root))
+        elseif code > 1 then
             local msg = vim.trim(table.concat(errbuf))
             done(msg ~= "" and msg or "rg failed")
         else
@@ -256,7 +287,10 @@ function M.run(query, opts, callback)
     end
 
     local root  = M.resolve_root(opts.cwd)
-    local bufs  = M.open_buffers(root, opts.flags and rgflags.buffer_filter(opts.flags))
+    -- Always, not only when there are flags to apply: with none, the filter
+    -- still holds the buffer pass to rg's own default file selection, which
+    -- takes in no hidden file.
+    local bufs  = M.open_buffers(root, rgflags.buffer_filter(opts.flags or {}))
     local open  = {} ---@type table<string, greplace.OpenBuf>
     for _, b in ipairs(bufs) do open[b.path] = b end
 
@@ -269,6 +303,7 @@ function M.run(query, opts, callback)
     local limit     = opts.limit
 
     local handles = {} ---@type greplace.util.SpawnHandle[]
+    local real    = {} ---@type table<string, string>  resolved paths, per search
 
     --- Collect one match, and stop both rg processes once `limit` of them have
     --- arrived. Every sink checks `truncated` before calling in, so the list
@@ -311,7 +346,7 @@ function M.run(query, opts, callback)
     local dir_cmd = rg_base(opts)
     if opts.flags then vim.list_extend(dir_cmd, rgflags.file_args(opts.flags)) end
     vim.list_extend(dir_cmd, { "--", query, "." })
-    handles[#handles + 1] = rg_json(dir_cmd, root, nil, function(m)
+    handles[#handles + 1] = rg_json(dir_cmd, root, real, nil, function(m)
         if not cancelled and not truncated and not open[m.path] then add(m) end
     end, on_pass_done)
 
@@ -327,7 +362,7 @@ function M.run(query, opts, callback)
 
         local buf_cmd = rg_base(opts)
         vim.list_extend(buf_cmd, { "--", query, "-" })
-        handles[#handles + 1] = rg_json(buf_cmd, root, table.concat(chunks, "\n"), function(m)
+        handles[#handles + 1] = rg_json(buf_cmd, root, real, table.concat(chunks, "\n"), function(m)
             if cancelled or truncated then return end
             local b, lnum = locate(bufs, starts, m.lnum)
             if b and lnum then

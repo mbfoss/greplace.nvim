@@ -378,6 +378,13 @@ describe(":Gsearch / :Greplace", function()
         assert.is_truthy(err("--regex=1 -- hit"):match("takes no value"))
         assert.is_truthy(err("--glob -- hit"):match("needs a glob"))
         assert.is_truthy(err("filter *.lua -- hit"):match("not a flag"))
+        -- `file_args` can only drop a depth it cannot read, so a value that is
+        -- not a whole number has to be caught here rather than searching the
+        -- whole tree as though no depth had been asked for.
+        assert.is_truthy(err("--max-depth abc -- hit"):match("whole number"))
+        assert.is_truthy(err("--max-depth 2.9 -- hit"):match("whole number"))
+        assert.is_truthy(require("greplace.rgflags")
+            .parse({ "--max-depth", "2", "--", "hit" }).flags["max-depth"] == "2")
     end)
 
     it("takes an escaped space in a plain `:Gsearch` query", function()

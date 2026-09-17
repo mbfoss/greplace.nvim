@@ -405,8 +405,14 @@ local function set_winbar(bufnr, status)
             config.limit)
     end
 
+    -- `text` is not always the plugin's own words: a query the user typed and
+    -- rg's stderr both reach here through `M.set_message`, and a `%` in a
+    -- winbar is a format item -- `%f` draws the file name, `%{...}` evaluates
+    -- a Vim expression. Double every one so it draws as itself.
+    text = text:gsub("%%", "%%%%")
+
     -- Trailing `%=` so the text sits left and the highlight does not run on
-    -- past it; `status` is plugin text, so there is no `%` to escape.
+    -- past it.
     local bar = string.format(" %%#GreplaceSeparator#%s%s%%=", text, limit)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(win) == bufnr then

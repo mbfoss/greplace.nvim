@@ -463,6 +463,64 @@ describe("greplace", function()
         assert.equals("bravo", panel.state(bufnr).query)
     end)
 
+    it("draws a `%` in a message as itself, not as a winbar item", function()
+        -- The message carries a query the user typed, and a winbar reads `%f`
+        -- as the file name and `%{...}` as a Vim expression to evaluate.
+        greplace.open("%f%{getcwd()}zz")
+        local bufnr = assert(panel.find_buf())
+        assert.is_true(vim.wait(5000, function()
+            local st = panel.state(bufnr)
+            return st ~= nil and st.message ~= nil
+        end, 20))
+
+        local winid  = vim.fn.bufwinid(bufnr)
+        local drawn  = vim.api.nvim_eval_statusline(vim.wo[winid].winbar,
+            { winid = winid }).str
+        assert.is_truthy(drawn:find("%f%{getcwd()}zz", 1, true))
+    end)
+
+    it("reports a search root it could not run rg in", function()
+        -- A process that never started exits -1, which is not rg saying it
+        -- found nothing -- and must not be reported as an empty result set.
+        local result = run_search("hit", { cwd = _root .. "/no/such/dir" })
+        assert.is_nil(result[1])
+        assert.is_truthy(tostring(result.err):match("could not run rg"))
+    end)
+
+    it("lists a file once when --follow reaches it through a symlink", function()
+        write_file("real/a.txt", { "hit one" })
+        assert.equals(0, vim.fn.system({ "ln", "-s", _root .. "/real",
+            _root .. "/link" }) and vim.v.shell_error)
+        -- Loaded through the link, so the buffer's own name resolves to the
+        -- real path while rg prints whichever spelling it walked.
+        assert(require("greplace.util").ensure_buf(_root .. "/link/a.txt"))
+
+        local matches = run_search("hit", { flags = { follow = true } })
+        assert.equals(1, #matches)
+        assert.equals("real/a.txt", matches[1].relpath)
+        -- And it is the buffer's text, not the disk copy read twice.
+        assert.is_truthy(matches[1].bufnr)
+    end)
+
+    it("leaves a hidden file out of the buffer pass, as rg does on disk", function()
+        write_file("plain.txt", { "hit one" })
+        write_file(".secret", { "hit two" })
+        -- Loaded, so only the buffer pass can reach it: rg never walks it.
+        assert(require("greplace.util").ensure_buf(_root .. "/.secret"))
+
+        local function relpaths(opts)
+            local out = {}
+            for _, m in ipairs(run_search("hit", opts)) do out[#out + 1] = m.relpath end
+            table.sort(out)
+            return out
+        end
+
+        assert.same({ "plain.txt" }, relpaths())
+        assert.same({ ".secret", "plain.txt" }, relpaths({ flags = { hidden = true } }))
+        -- A `--glob` that matches is rg's own override of the hidden rule.
+        assert.same({ ".secret" }, relpaths({ flags = { glob = { ".secret" } } }))
+    end)
+
     it("cancels the running search when the panel is wiped out", function()
         write_file("a.txt", { "hit one" })
         greplace.open("hit")
