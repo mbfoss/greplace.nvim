@@ -6,8 +6,9 @@ local M = {}
 -- Kept in its own module so that the modules which read it (`greplace.init`,
 -- and anything else that grows a knob later) depend on the settings rather
 -- than on each other, and so that `setup()` can be called before or after the
--- first search without either order mattering: the table is mutated in place
--- and read at use time.
+-- first search without either order mattering: `current` is refilled in place,
+-- so a module may capture it once at its top
+-- (`local config = require("greplace.config").current`).
 -- ---------------------------------------------------------------------------
 
 ---@class greplace.Keys
@@ -40,16 +41,44 @@ local _defaults = {
     },
 }
 
+--- The live settings, at the defaults until `setup()` applies the user's.
+--- Always this same table: `setup()` refills it in place, so a captured
+--- reference -- this table or any table under it -- never goes stale.
 ---@type greplace.Config
-M.options = vim.deepcopy(_defaults)
+M.current = vim.deepcopy(_defaults)
 
---- Merge `opts` over the current settings. Optional: every default stands on
---- its own, so a user who never calls `setup()` gets the same plugin.
+--- The settings as they shipped. A fresh deep copy every call, so the caller
+--- may keep or mutate it.
+---@return greplace.Config
+function M.defaults()
+    return vim.deepcopy(_defaults)
+end
+
+--- Overwrite `dst` from `src` key by key: a key `src` lacks is dropped, and a
+--- table on both sides recurses instead of being swapped in. Nothing reachable
+--- from `current` is ever replaced, and nothing stale is left behind.
+local function _refill(dst, src)
+    for k in pairs(dst) do
+        if src[k] == nil then dst[k] = nil end
+    end
+    for k, v in pairs(src) do
+        if type(v) == "table" and type(dst[k]) == "table" then
+            _refill(dst[k], v)
+        else
+            dst[k] = v
+        end
+    end
+end
+
+--- Merge `opts` over the defaults. Optional: every default stands on its own,
+--- so a user who never calls `setup()` gets the same plugin. Merging over a
+--- fresh copy of the defaults rather than over `current` means no key of an
+--- earlier call can survive into a later one.
 ---@param opts greplace.Config?
 function M.setup(opts)
     -- Deep, so that a user who names one key does not drop the rest of
     -- `keys` along with it.
-    M.options = vim.tbl_deep_extend("force", M.options, opts or {})
+    _refill(M.current, vim.tbl_deep_extend("force", vim.deepcopy(_defaults), opts or {}))
 end
 
 return M

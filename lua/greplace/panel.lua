@@ -15,7 +15,7 @@ local M = {}
 -- A line the user has edited is marked in front of its `│`.
 -- ---------------------------------------------------------------------------
 
-local config   = require("greplace.config")
+local config   = require("greplace.config").current
 local util     = require("greplace.util")
 local ui       = require("greplace.util.ui")
 local strutil  = require("greplace.util.strutil")
@@ -380,7 +380,7 @@ end
 ---@param bufnr  integer
 ---@param status string?
 local function set_winbar(bufnr, status)
-    if not config.options.winbar then return end
+    if not config.winbar then return end
     if not _state[bufnr] then return end
 
     -- A final message outlives the buffer write that showed it, so that any
@@ -402,7 +402,7 @@ local function set_winbar(bufnr, status)
     local limit = ""
     if _state[bufnr].truncated then
         limit = string.format("  %%#GreplaceLimit#limit of %d reached",
-            config.options.limit)
+            config.limit)
     end
 
     -- Trailing `%=` so the text sits left and the highlight does not run on
@@ -533,14 +533,14 @@ local function create_buf(on_write)
         nested = true,
         callback = function() on_write(bufnr) end,
     })
-    if config.options.keys.open and config.options.keys.open ~= "" then
-        vim.keymap.set("n", config.options.keys.open, function() jump(bufnr) end, {
+    if config.keys.open and config.keys.open ~= "" then
+        vim.keymap.set("n", config.keys.open, function() jump(bufnr) end, {
             buffer = bufnr,
             desc   = "greplace: open the source of the line under the cursor",
         })
     end
-    if config.options.keys.hover and config.options.keys.hover ~= "" then
-        vim.keymap.set("n", config.options.keys.hover, function() hover(bufnr) end, {
+    if config.keys.hover and config.keys.hover ~= "" then
+        vim.keymap.set("n", config.keys.hover, function() hover(bufnr) end, {
             buffer = bufnr,
             desc   = "greplace: show the full details of the match under the cursor",
         })
@@ -680,7 +680,7 @@ local function location_width(matches)
     for _, m in ipairs(matches) do
         width = math.max(width, vim.fn.strdisplaywidth(m.relpath .. ":" .. m.lnum))
     end
-    return math.min(width, math.max(config.options.path_width or width, 2))
+    return math.min(width, math.max(config.path_width or width, 2))
 end
 
 --- Rewrite the whole buffer with undo turned off, so that `u` cannot walk back

@@ -33,7 +33,7 @@ local M = {}
 -- `greplace.search` / `greplace.qflist` / `greplace.panel` / `greplace.apply`.
 -- ---------------------------------------------------------------------------
 
-local config = require("greplace.config")
+local config = require("greplace.config").current
 local panel  = require("greplace.panel")
 local search = require("greplace.search")
 
@@ -101,7 +101,7 @@ function M.open(query, opts)
         query    = query,
         flags    = opts.flags,
         root     = root,
-        height   = config.options.height,
+        height   = config.height,
         on_write = on_write,
     }
     -- Whatever was still running was searching for the previous query into
@@ -122,7 +122,7 @@ function M.open(query, opts)
     _cancel = search.run(query, {
             cwd   = root,
             flags = opts.flags,
-            limit = config.options.limit,
+            limit = config.limit,
         },
         function(matches, err, truncated)
             _cancel = nil
@@ -165,7 +165,7 @@ function M.open_qf()
         query    = "quickfix list",
         source   = "quickfix",
         root     = root,
-        height   = config.options.height,
+        height   = config.height,
         on_write = on_write,
     })
 
@@ -185,7 +185,7 @@ function M.show()
         _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
         return
     end
-    panel.show(bufnr, config.options.height)
+    panel.show(bufnr, config.height)
     return bufnr
 end
 
@@ -308,7 +308,7 @@ end
 
 ---@param opts greplace.Config?
 function M.setup(opts)
-    config.setup(opts)
+    require("greplace.config").setup(opts)
     panel.setup_highlights()
 end
 
