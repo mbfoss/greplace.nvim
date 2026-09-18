@@ -346,6 +346,9 @@ describe(":Gsearch / :Greplace", function()
         assert.is_false(vim.tbl_contains(after, "--hidden"))
         assert.is_true(vim.tbl_contains(after, "--glob"))
 
+        -- The separator is offered alongside the flags.
+        assert.is_true(vim.tbl_contains(after, "--"))
+
         -- Past the separator the words are a query, not a list.
         assert.are.same({}, complete("h", "Gsearch -- h"))
 

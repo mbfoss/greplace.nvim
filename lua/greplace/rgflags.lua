@@ -382,7 +382,8 @@ end
 
 --- Flag names still worth offering: a switch already written is left out (it is
 --- already on), while a repeatable one is offered for as long as it is legal to
---- write again.
+--- write again. The separator closes the list: it is always legal to write, and
+--- the one way from the flags to the query.
 ---@param rest string[]  the words settled behind the one being typed
 ---@return string[]
 local function flag_candidates(rest)
@@ -392,7 +393,7 @@ local function flag_candidates(rest)
         if n then written[n] = true end
     end
 
-    local out = {}
+    local out = {"--"}
     for _, def in ipairs(M.FLAGS) do
         if def.multi or not written[def.name] then
             out[#out + 1] = "--" .. def.name

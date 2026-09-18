@@ -109,8 +109,8 @@ value flag left without one, is reported instead of searched.
 
 Flag names and values tab-complete: `--type` against `rg --type-list`, `--dir`
 against directories, whether the value is written after the flag or glued to it
-with `=`. A switch already on the line drops out of the candidates, and past
-the `--` nothing completes at all: those words are a query, not a list.
+with `=`. A switch already on the line drops out of the candidates, the `--`
+separator is offered with them, and past it nothing completes at all: those words are a query, not a list.
 
 | Flag | Effect |
 | --- | --- |
