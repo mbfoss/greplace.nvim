@@ -239,15 +239,17 @@ describe(":Gsearch / :Greplace", function()
         vim.api.nvim_feedkeys(
             vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
 
-        assert.are.equal(_root .. "/a.txt",
-            vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()))
-        assert.are.same({ 2, 6 }, vim.api.nvim_win_get_cursor(0))
-        -- The panel keeps its own window rather than being opened over.
-        local shown = false
+        -- The cursor stays in the panel, which keeps its own window rather
+        -- than being opened over.
+        assert.are.equal(bufnr, vim.api.nvim_get_current_buf())
+        local opened
         for _, win in ipairs(vim.api.nvim_list_wins()) do
-            if vim.api.nvim_win_get_buf(win) == bufnr then shown = true end
+            if vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)) == _root .. "/a.txt" then
+                opened = win
+            end
         end
-        assert.is_true(shown)
+        assert.is_truthy(opened)
+        assert.are.same({ 2, 6 }, vim.api.nvim_win_get_cursor(opened))
     end)
 
     it("filters the file set with a flag line", function()

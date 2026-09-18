@@ -167,13 +167,14 @@ not from disk; their locations are marked with `≡`.
 
 | Key | Effect |
 | --- | --- |
-| `<CR>` | open the source of the line under the cursor, at that line and column |
+| `<CR>` | open the source of the line under the cursor, at that line and column, keeping the cursor in the panel |
 | `K` | show the match under the cursor in a floating window: its full path, relative path, line number, whether it is already loaded in a buffer, and the source line as the panel rendered it |
 | `]c` | move to the next edited line |
 | `[c` | move to the previous edited line |
 
 The file opens in a regular window: the panel keeps its own, and is never
-opened over. Set `keys.open` or `keys.hover` to a different key, or to `false`,
+opened over. The cursor stays in the panel, so `j<CR>` steps through the
+matches one after another. Set `keys.open` or `keys.hover` to a different key, or to `false`,
 to change or drop either mapping.
 
 `]c` and `[c` step through the lines marked `•`, as they do in a diff, and take

@@ -423,6 +423,16 @@ describe("greplace", function()
         local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
         assert.is_truthy(winbar:find("limit of 5 reached", 1, true))
 
+        -- Removing a line takes the list below the limit, and the note with
+        -- it; putting the line back brings the note back.
+        local function limit_shown()
+            return vim.wo[vim.fn.bufwinid(bufnr)].winbar:find("limit of", 1, true) ~= nil
+        end
+        vim.api.nvim_buf_call(bufnr, function() vim.cmd("normal! ggdd") end)
+        assert.is_true(vim.wait(1000, function() return not limit_shown() end, 10))
+        vim.api.nvim_buf_call(bufnr, function() vim.cmd("undo") end)
+        assert.is_true(vim.wait(1000, limit_shown, 10))
+
         -- A search that fits says nothing about a limit.
         require("greplace.config").setup({ limit = 10000 })
         greplace.open("hit 1")

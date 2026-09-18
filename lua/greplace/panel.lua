@@ -446,13 +446,14 @@ local function set_winbar(bufnr, status)
             plural(st.changes, "change")) or ""
     end
 
-    -- A truncated list is a partial answer to the query, and one that stays
-    -- partial: the matches beyond the limit were never collected, so nothing
-    -- in the panel hints at them. Say so for as long as the panel holds that
-    -- list -- including while the counts move under editing, since those counts
-    -- are what would otherwise read as the whole story.
+    -- A truncated list is a partial answer to the query: the matches beyond
+    -- the limit were never collected, so nothing in the panel hints at them.
+    -- Say so while the panel still lists the full `limit` of them. Once lines
+    -- are removed from it, the counts no longer sit at the limit, and the note
+    -- would only be noise; an undo that brings them back brings it back too.
     local limit = ""
-    if _state[bufnr].truncated then
+    local st    = M.stats(bufnr)
+    if _state[bufnr].truncated and (not st or st.lines >= config.limit) then
         limit = string.format("  %%#GreplaceLimit#limit of %d reached",
             config.limit)
     end
@@ -495,7 +496,8 @@ function M.entry_at(bufnr, row)
 end
 
 --- Open the source of the line under the cursor, in a regular window (never
---- over the panel itself), on the line the match came from.
+--- over the panel itself), on the line the match came from. The cursor stays
+--- in the panel, so that going down the list shows one match after another.
 ---@param bufnr integer
 local function jump(bufnr)
     local pos = vim.api.nvim_win_get_cursor(0)
@@ -508,7 +510,7 @@ local function jump(bufnr)
     -- The panel line is the source line verbatim, so on the anchor's own row
     -- the column carries over; on a row the user added below it, it does not.
     local target_col = anchor_row == row - 1 and col or 0
-    if ui.smart_open_file(entry.path, entry.lnum, target_col, true) == -1 then
+    if ui.smart_open_file(entry.path, entry.lnum, target_col, false) == -1 then
         vim.notify("greplace: cannot open " .. entry.relpath, vim.log.levels.ERROR)
     end
 end
@@ -856,8 +858,6 @@ local function show(bufnr, height)
     end
     vim.cmd(string.format("botright %dsplit", height))
     vim.api.nvim_win_set_buf(0, bufnr)
-    vim.wo[0][0].number         = false
-    vim.wo[0][0].relativenumber = false
     vim.wo[0][0].wrap           = false
     vim.wo[0][0].signcolumn     = "no"
     -- The panel keeps its window: <CR> (and anything else that opens a file)
