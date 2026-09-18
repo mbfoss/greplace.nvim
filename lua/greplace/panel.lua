@@ -639,6 +639,17 @@ local function create_buf(on_write)
     vim.bo[bufnr].bufhidden = "hide"
     vim.bo[bufnr].swapfile  = false
     vim.bo[bufnr].filetype  = "greplace"
+    -- A line broken in the panel is always taken back, so indenting the new
+    -- one is of no use -- and it does harm: Vim remembers having indented it,
+    -- and on <Esc> deletes that "indent", which after the revert is the white
+    -- space at the cursor on the restored line. Every option that sets that
+    -- off goes, a comment leader inserted by <CR> included. After `filetype`,
+    -- whose ftplugins could set them again.
+    vim.bo[bufnr].autoindent    = false
+    vim.bo[bufnr].smartindent   = false
+    vim.bo[bufnr].cindent       = false
+    vim.bo[bufnr].indentexpr    = ""
+    vim.bo[bufnr].formatoptions = vim.bo[bufnr].formatoptions:gsub("[ro]", "")
 
     vim.api.nvim_create_autocmd("BufWriteCmd", {
         buffer = bufnr,
