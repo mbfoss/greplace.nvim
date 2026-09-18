@@ -25,6 +25,8 @@ end, {
     -- `nargs = "*"` rather than `"?"`: a query is one string that may well
     -- contain spaces, and it is rejoined from the words Vim split off.
     nargs    = "*",
+    -- `:'<,'>Gsearch` searches for the selection; the body reads the range.
+    range    = true,
     -- Only a flag line completes, and only its flag section: a query is not a
     -- list of anything, and past a bare `--` neither is the rest of the line.
     complete = function(arglead, cmdline, cursor)
@@ -42,10 +44,12 @@ vim.api.nvim_create_user_command("Greplace", function(opts)
         return greplace.run(cmd, args, cmd_opts)
     end)
 end, {
-    desc     = "The greplace panel: open, toggle, or fill from the quickfix list",
+    desc     = "The greplace panel: open, toggle, refresh, or fill from the quickfix list",
     -- `nargs = "*"` rather than `"?"`: a second word is reported by the body
     -- as the error it is, rather than by Neovim as a bare "Too many arguments".
     nargs    = "*",
+    -- `:Greplace! refresh` discards unapplied edits rather than keeping them.
+    bang     = true,
     complete = function(arglead, cmdline, cursor)
         usercmd = usercmd or require("greplace.util.usercmd")
         return usercmd.complete(arglead, cmdline:sub(1, cursor), function(_, rest)

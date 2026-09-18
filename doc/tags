@@ -8,5 +8,6 @@ greplace-installation	greplace.txt	/*greplace-installation*
 greplace-keymaps	greplace.txt	/*greplace-keymaps*
 greplace-panel	greplace.txt	/*greplace-panel*
 greplace-qf	greplace.txt	/*greplace-qf*
+greplace-selection	greplace.txt	/*greplace-selection*
 greplace-table-of-contents	greplace.txt	/*greplace-table-of-contents*
 greplace-usage	greplace.txt	/*greplace-usage*

@@ -15,12 +15,16 @@ local M = {}
 --                             with `--` is a flag line, so a query that starts
 --                             with one is written after a bare `--`
 --   Gsearch                   with nothing at all: cancel the search in flight
+--   '<,'>Gsearch [<flags>]    search for the visual selection (or the line
+--                             in the range), literally, under any flags given
 --
 --   Greplace [open]           put the panel back on screen
 --   Greplace close            take it off again, keeping the list in it
 --   Greplace toggle           one or the other, whichever it is not
 --   Greplace qf               fill the panel from the quickfix list, whatever
 --                             filled that, instead of from a search
+--   Greplace[!] refresh       run the list's search (or quickfix import)
+--                             again; `!` discards unapplied edits
 --
 -- The split is deliberate: `:Gsearch` is the one that produces a list, and
 -- `:Greplace` is what you do with the panel afterwards, so the panel's own
@@ -232,15 +236,22 @@ function M.cancel()
     _notify("search cancelled")
 end
 
---- Rebuild the panel from what it was opened on, discarding unapplied edits:
---- the query for a search, the quickfix list as it now stands for one filled
---- by `:Greplace qf`. No command runs this -- it is for a mapping that
---- wants the list brought up to date with the files underneath it.
-function M.refresh()
+--- Rebuild the panel from what it was opened on: the query for a search, the
+--- quickfix list as it now stands for one filled by `:Greplace qf`. It brings
+--- the list up to date with the files underneath it. Unapplied edits would be
+--- lost with the old list, so a panel holding any is left alone unless `force`
+--- says to discard them.
+---@param opts { force: boolean? }?
+function M.refresh(opts)
     local bufnr = panel.find_buf()
     local state = bufnr and panel.state(bufnr)
-    if not state then
-        _notify("no active search", vim.log.levels.WARN)
+    if not bufnr or not state then
+        _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
+        return
+    end
+    if vim.bo[bufnr].modified and not (opts and opts.force) then
+        _notify("the list has unapplied edits: write them with :w, "
+            .. "or discard them with :Greplace! refresh", vim.log.levels.WARN)
         return
     end
     if state.source == "quickfix" then
@@ -248,6 +259,50 @@ function M.refresh()
     else
         M.open(state.query, { cwd = state.root, flags = state.flags })
     end
+end
+
+--- The query a `:Gsearch` given a range searches for. A range is what `:`
+--- puts in front of the command from Visual mode, so when it covers exactly
+--- the last selection the selected text is the query, as it was selected; any
+--- other range, a linewise selection among them, stands for its line, less the
+--- indentation and trailing blanks around it. Either way it is one line: rg
+--- matches line by line, so text spanning a line break could never match.
+---@param opts vim.api.keyset.create_user_command.command_args
+---@return string? query
+---@return string? err
+local function range_query(opts)
+    if opts.line1 ~= opts.line2 then
+        return nil, "the range spans several lines; a search is for text on one line"
+    end
+    local mode   = vim.fn.visualmode()
+    local vstart = vim.fn.getpos("'<")
+    local vend   = vim.fn.getpos("'>")
+    local text
+    if (mode == "v" or mode == "\22")
+        and vstart[2] == opts.line1 and vend[2] == opts.line2 then
+        text = table.concat(vim.fn.getregion(vstart, vend, { type = mode }), "\n")
+    else
+        text = vim.trim(vim.fn.getline(opts.line1))
+    end
+    if text == "" then
+        return nil, "nothing to search for: the line is blank"
+    end
+    return text
+end
+
+--- Run a flag line, `--flag ... -- query`, as `greplace.rgflags` reads it.
+---@param fargs string[]
+local function open_flag_line(fargs)
+    local parsed, err = require("greplace.rgflags").parse(fargs)
+    if not parsed then
+        _notify(assert(err), vim.log.levels.ERROR)
+        return
+    end
+    -- `dir` is the flag language's spelling of the search root.
+    M.open(parsed.query, {
+        flags = parsed.flags,
+        cwd   = parsed.flags.dir and vim.fn.expand(parsed.flags.dir) or nil,
+    })
 end
 
 --- `:Gsearch`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
@@ -264,10 +319,37 @@ end
 ---
 --- With no words at all -- not with a blank query, which `:Gsearch \ ` is a
 --- legitimate way to write -- cancel the search in flight.
+---
+--- With a range, `:'<,'>Gsearch`, the selection is the query (see
+--- `range_query`), and the words, if any, are its flags: a trailing `--` may
+--- close them, but nothing may follow it.
 ---@param _cmd string
 ---@param fargs string[]  the argument line, as Neovim split it
----@param _opts vim.api.keyset.create_user_command.command_args
-function M.run_search(_cmd, fargs, _opts)
+---@param opts vim.api.keyset.create_user_command.command_args
+function M.run_search(_cmd, fargs, opts)
+    if opts.range and opts.range > 0 then
+        local query, err = range_query(opts)
+        if not query then
+            _notify(assert(err), vim.log.levels.ERROR)
+            return
+        end
+        local flags = vim.list_slice(fargs)
+        if flags[#flags] == "--" then flags[#flags] = nil end
+        if #flags == 0 then
+            M.open(query)
+            return
+        end
+        if not vim.startswith(flags[1], "--") or vim.tbl_contains(flags, "--") then
+            _notify("with a range the selection is the query: give flags only",
+                vim.log.levels.ERROR)
+            return
+        end
+        table.insert(flags, "--")
+        table.insert(flags, query)
+        open_flag_line(flags)
+        return
+    end
+
     if #fargs == 0 then
         M.cancel()
         return
@@ -278,28 +360,20 @@ function M.run_search(_cmd, fargs, _opts)
         return
     end
 
-    local parsed, err = require("greplace.rgflags").parse(fargs)
-    if not parsed then
-        _notify(assert(err), vim.log.levels.ERROR)
-        return
-    end
-    -- `dir` is the flag language's spelling of the search root.
-    M.open(parsed.query, {
-        flags = parsed.flags,
-        cwd   = parsed.flags.dir and vim.fn.expand(parsed.flags.dir) or nil,
-    })
+    open_flag_line(fargs)
 end
 
 --- The subcommands of `:Greplace`, in the order they are offered.
 ---@type string[]
-M.SUBCOMMANDS = { "open", "close", "toggle", "qf" }
+M.SUBCOMMANDS = { "open", "close", "toggle", "qf", "refresh" }
 
 --- `:Greplace`'s implementation: what to do with the panel, `open` by default.
---- It never searches, so it needs no query and takes none.
+--- It takes no query: `refresh` runs the list's own search again. The bang is
+--- `refresh`'s alone, and discards the edits it would otherwise refuse to lose.
 ---@param _cmd string
 ---@param fargs string[]  the argument line, as Neovim split it
----@param _opts vim.api.keyset.create_user_command.command_args
-function M.run(_cmd, fargs, _opts)
+---@param opts vim.api.keyset.create_user_command.command_args
+function M.run(_cmd, fargs, opts)
     local sub = fargs[1] or "open"
     if #fargs > 1 then
         _notify(("%s takes no argument"):format(sub), vim.log.levels.ERROR)
@@ -311,6 +385,8 @@ function M.run(_cmd, fargs, _opts)
         M.toggle()
     elseif sub == "qf" then
         M.open_qf()
+    elseif sub == "refresh" then
+        M.refresh({ force = opts.bang })
     else
         _notify(("unknown subcommand: %s (%s)")
             :format(sub, table.concat(M.SUBCOMMANDS, ", ")), vim.log.levels.ERROR)

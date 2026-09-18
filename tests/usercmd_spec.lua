@@ -359,7 +359,7 @@ describe(":Gsearch / :Greplace", function()
     end)
 
     it("completes `:Greplace`'s subcommands, and nothing behind them", function()
-        assert.are.same({ "open", "close", "toggle", "qf" },
+        assert.are.same({ "open", "close", "toggle", "qf", "refresh" },
             vim.fn.getcompletion("Greplace ", "cmdline"))
         assert.are.same({ "toggle" }, vim.fn.getcompletion("Greplace tog", "cmdline"))
         assert.are.same({}, vim.fn.getcompletion("Greplace toggle ", "cmdline"))
@@ -470,5 +470,105 @@ describe(":Gsearch / :Greplace", function()
 
         local target = assert(require("greplace.util").find_buf(_root .. "/a.lua"))
         assert.equals("lua", vim.bo[target].filetype)
+    end)
+    it("runs the list's search again with `:Greplace refresh`", function()
+        write_file("a.txt", { "alpha one" })
+        local bufnr = assert(run("Gsearch alpha"))
+        assert.are.same({ "alpha one" }, panel_lines(bufnr))
+
+        write_file("a.txt", { "alpha one", "alpha two" })
+        assert.are.equal(bufnr, run("Greplace refresh"))
+        assert.is_true(vim.wait(5000, function()
+            return #panel_lines(bufnr) == 2
+        end, 20))
+        assert.are.same({ "alpha one", "alpha two" }, panel_lines(bufnr))
+    end)
+
+    it("keeps unapplied edits from `:Greplace refresh`, and drops them with `!`", function()
+        write_file("a.txt", { "alpha one" })
+        local bufnr = assert(run("Gsearch alpha"))
+        vim.api.nvim_buf_set_text(bufnr, 0, 0, 0, 5, { "omega" })
+
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("Greplace refresh")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("unapplied edits"))
+        assert.are.same({ "omega one" }, panel_lines(bufnr))
+
+        run("Greplace! refresh")
+        assert.is_true(vim.wait(5000, function()
+            return panel_lines(bufnr)[1] == "alpha one"
+        end, 20))
+        assert.is_false(vim.bo[bufnr].modified)
+    end)
+
+    it("says so when there is no list to refresh", function()
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("Greplace refresh")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no list yet"))
+    end)
+
+    --- Edit `rel` in a window of its own: the one the cursor is in may be the
+    --- panel's, left behind by an earlier spec, and that one is fixed to it.
+    ---@param rel string
+    local function edit(rel)
+        vim.cmd("silent! new | only")
+        vim.cmd.edit(_root .. "/" .. rel)
+    end
+
+    ---@param rel  string  file to open and select in
+    ---@param keys string  Normal-mode keys that make the selection
+    local function select_in(rel, keys)
+        edit(rel)
+        vim.api.nvim_feedkeys(
+            vim.api.nvim_replace_termcodes(keys .. "<Esc>", true, false, true), "x", false)
+    end
+
+    it("searches for the visual selection, literally, from `:'<,'>Gsearch`", function()
+        write_file("a.txt", { "call foo(a.b) here", "foo(axb)", "foo(a.b)" })
+        select_in("a.txt", "0wv$F)")
+        local bufnr = assert(run("'<,'>Gsearch"))
+        assert.are.same({ "call foo(a.b) here", "foo(a.b)" }, panel_lines(bufnr))
+    end)
+
+    it("searches for the line, trimmed, from a linewise selection or a range", function()
+        write_file("a.txt", { "  two words  ", "two", "x two words y" })
+        select_in("a.txt", "gg0V")
+        local bufnr = assert(run("'<,'>Gsearch"))
+        assert.are.same({ "  two words  ", "x two words y" }, panel_lines(bufnr))
+
+        edit("a.txt")
+        assert.are.same({ "two" }, panel_lines(assert(run("2Gsearch --line"))))
+    end)
+
+    it("takes flags with a range, the selection as their query", function()
+        write_file("a.lua", { "hit" })
+        write_file("b.md", { "hit" })
+        select_in("a.lua", "gg0viw")
+        local bufnr = assert(run("'<,'>Gsearch --glob *.md --"))
+        local state = assert(panel.state(bufnr))
+        assert.are.same({ "b.md" }, vim.tbl_map(function(e) return e.relpath end,
+            vim.tbl_values(state.entries)))
+    end)
+
+    it("refuses a range over several lines, or a query beside the selection", function()
+        write_file("a.txt", { "one", "two" })
+        edit("a.txt")
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("1,2Gsearch")
+        assert.is_truthy(notified and notified:match("several lines"))
+        vim.cmd("1Gsearch --regex -- one")
+        assert.is_truthy(notified and notified:match("flags only"))
+        vim.cmd("1Gsearch one")
+        assert.is_truthy(notified and notified:match("flags only"))
+        vim.notify = orig
+        assert.is_nil(panel.find_buf())
     end)
 end)

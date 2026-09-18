@@ -52,10 +52,12 @@ themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 | `:Gsearch foo bar` | literal search for `foo bar` (smart-case) |
 | `:Gsearch --hidden -- foo` | the same search with flags; see below |
 | `:Gsearch` | with nothing at all: cancel the search still running |
+| `:'<,'>Gsearch` | search for the visual selection; see below |
 | `:Greplace` | put the panel back on screen (`:Greplace open`) |
 | `:Greplace close` | take it off again, keeping the list in it |
 | `:Greplace toggle` | one or the other, whichever it is not |
 | `:Greplace qf` | fill the panel from the quickfix list instead of a search |
+| `:Greplace refresh` | run the list's search again (`!` discards unapplied edits) |
 
 Two commands, split by what they do: `:Gsearch` is the one that produces a
 list, and `:Greplace` is what you do with the panel afterwards, so the panel's
@@ -76,6 +78,35 @@ panel back on screen with the list and any unapplied edits it was holding.
 keep the buffer, so showing it again brings back the same list rather than
 searching for it again. `qf` refills it, below. The subcommands tab-complete,
 and there is nothing to show until a search has filled the panel once.
+
+`refresh` runs the list's search again, with the same query, flags and root, so
+the panel catches up with files changed since; a list from `:Greplace qf` is
+refilled from the quickfix list as it now stands. A panel holding unapplied
+edits is left alone, since the fresh list would drop them: write them first, or
+use `:Greplace! refresh` to discard them.
+
+### `:'<,'>Gsearch`: searching for the selection <!-- tag: selection -->
+
+Given a range, `:Gsearch` takes its query from the buffer rather than the
+command line. Select text and press `:`, which fills in `'<,'>`, and the
+selected text is searched for literally, exactly as selected: no `\ ` to type,
+no backslash to double. With a linewise selection, or a range typed by hand
+(`:.Gsearch`, `:12Gsearch`), the query is that whole line with its indentation
+and trailing blanks trimmed.
+
+The range must stay on one line: ripgrep matches line by line, so a query
+spanning a line break could never match. Flags may follow, and the selection
+becomes their query, so `--` is optional and nothing may come after it:
+
+```
+:'<,'>Gsearch --type lua --word
+```
+
+A mapping makes it one key:
+
+```lua
+vim.keymap.set("x", "<leader>s", ":Gsearch<CR>", { desc = "greplace: search selection" })
+```
 
 ### `:Gsearch --flags`: searching <!-- tag: flags -->
 
