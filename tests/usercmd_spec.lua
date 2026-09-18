@@ -359,7 +359,7 @@ describe(":Gsearch / :Greplace", function()
     end)
 
     it("completes `:Greplace`'s subcommands, and nothing behind them", function()
-        assert.are.same({ "open", "close", "toggle", "qf", "refresh" },
+        assert.are.same({ "open", "close", "toggle", "qf", "refresh", "diff", "apply" },
             vim.fn.getcompletion("Greplace ", "cmdline"))
         assert.are.same({ "toggle" }, vim.fn.getcompletion("Greplace tog", "cmdline"))
         assert.are.same({}, vim.fn.getcompletion("Greplace toggle ", "cmdline"))
@@ -570,5 +570,157 @@ describe(":Gsearch / :Greplace", function()
         assert.is_truthy(notified and notified:match("flags only"))
         vim.notify = orig
         assert.is_nil(panel.find_buf())
+    end)
+    it("previews a write as a diff with `:Greplace diff`, changing nothing", function()
+        write_file("a.txt", { "one", "alpha two", "three" })
+        write_file("b.txt", { "alpha four" })
+        local bufnr = assert(run("Gsearch alpha"))
+        -- Edit a.txt's match; b.txt's is left alone and so is not in the diff.
+        vim.api.nvim_buf_set_text(bufnr, 0, 0, 0, 5, { "omega" })
+
+        local tabs = #vim.api.nvim_list_tabpages()
+        vim.cmd("Greplace diff")
+        assert.are.equal(tabs + 1, #vim.api.nvim_list_tabpages())
+        local pbuf = vim.api.nvim_get_current_buf()
+        assert.are.equal("greplace://greplace-diff", vim.api.nvim_buf_get_name(pbuf))
+        assert.are.equal("diff", vim.bo[pbuf].filetype)
+        assert.are.same({
+            "--- a/a.txt",
+            "+++ b/a.txt",
+            "@@ -1,3 +1,3 @@",
+            " one",
+            "-alpha two",
+            "+omega two",
+            " three",
+        }, vim.api.nvim_buf_get_lines(pbuf, 0, -1, false))
+
+        -- Nothing was applied, and nothing was loaded to find out.
+        assert.is_nil(require("greplace.util").find_buf(_root .. "/a.txt"))
+        assert.is_true(vim.bo[bufnr].modified)
+
+        vim.cmd("normal q")
+        assert.is_false(vim.api.nvim_buf_is_valid(pbuf))
+        assert.are.equal(tabs, #vim.api.nvim_list_tabpages())
+
+        -- A second preview replaces the first rather than stacking up.
+        vim.cmd("Greplace diff")
+        vim.cmd("Greplace diff")
+        assert.are.equal(tabs + 1, #vim.api.nvim_list_tabpages())
+    end)
+
+    it("previews an open buffer's unsaved text, and notes an edit it would skip", function()
+        write_file("a.txt", { "alpha one", "alpha two" })
+        local bufnr = assert(run("Gsearch alpha"))
+        vim.api.nvim_buf_set_text(bufnr, 0, 0, 0, 5, { "omega" })
+        vim.api.nvim_buf_set_text(bufnr, 1, 0, 1, 5, { "omega" })
+
+        -- The source line under the first match moves on, in its buffer.
+        local src = vim.fn.bufadd(_root .. "/a.txt")
+        vim.fn.bufload(src)
+        vim.api.nvim_buf_set_lines(src, 0, 1, false, { "changed" })
+
+        vim.cmd("Greplace diff")
+        local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+        assert.are.equal("# skipped a.txt:1 (source changed)", lines[1])
+        assert.is_truthy(vim.tbl_contains(lines, "+omega two"))
+        assert.is_truthy(vim.tbl_contains(lines, " changed"))
+    end)
+
+    it("says so when there is nothing to preview", function()
+        write_file("a.txt", { "alpha one" })
+        run("Gsearch alpha")
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("Greplace diff")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no changes to preview"))
+    end)
+    it("applies the panel with `:Greplace apply`, as `:w` does, from any window", function()
+        write_file("a.txt", { "alpha one" })
+        local bufnr = assert(run("Gsearch alpha"))
+        vim.api.nvim_buf_set_text(bufnr, 0, 0, 0, 5, { "omega" })
+
+        -- From the preview's tab, which is where it is most likely typed.
+        local tabs = #vim.api.nvim_list_tabpages()
+        vim.cmd("Greplace diff")
+        local pbuf = vim.api.nvim_get_current_buf()
+        vim.cmd("Greplace apply")
+
+        -- The preview showed the edits before they landed, so it goes.
+        assert.is_false(vim.api.nvim_buf_is_valid(pbuf))
+        assert.are.equal(tabs, #vim.api.nvim_list_tabpages())
+
+        local src = assert(require("greplace.util").find_buf(_root .. "/a.txt"))
+        assert.are.same({ "omega one" }, vim.api.nvim_buf_get_lines(src, 0, -1, false))
+        assert.is_false(vim.bo[bufnr].modified)
+        -- In memory only, as ever.
+        assert.are.same({ "alpha one" }, vim.fn.readfile(_root .. "/a.txt"))
+    end)
+    it("leaves a panel with no list yet alone on `:Greplace apply`", function()
+        write_file("a.txt", { "alpha one" })
+        run_empty("Gsearch nomatch")
+        local bufnr = assert(panel.find_buf())
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("Greplace apply")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no list to apply"))
+        assert.is_truthy(assert(panel.state(bufnr)).message:match("no matches"))
+    end)
+    it("ends the list when the panel is `:bdelete`d, not just wiped out", function()
+        write_file("a.txt", { "alpha one" })
+        local bufnr = assert(run("Gsearch alpha"))
+        vim.cmd("split")
+        vim.cmd("bdelete " .. bufnr)
+        -- Unloaded rather than wiped, but gone all the same once Neovim is
+        -- done deleting it: nothing named like the panel is left to show.
+        assert.is_true(vim.wait(1000, function()
+            return not vim.api.nvim_buf_is_valid(bufnr)
+        end, 10))
+        assert.is_nil(panel.find_buf())
+
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("Greplace")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no list yet"))
+
+        -- And the next search starts a fresh panel that works as ever.
+        assert.are.same({ "alpha one" }, panel_lines(assert(run("Gsearch alpha"))))
+    end)
+
+    it("cancels the search in flight when the panel is `:bdelete`d", function()
+        write_file("a.txt", { "hit one" })
+        vim.cmd("Gsearch hit")
+        local bufnr = assert(panel.find_buf())
+        vim.cmd("split")
+        vim.cmd("bdelete " .. bufnr)
+        assert.is_true(vim.wait(1000, function()
+            return not vim.api.nvim_buf_is_valid(bufnr)
+        end, 10))
+        -- The search was stopped, not left to run into nothing.
+        local notified
+        local orig = vim.notify
+        vim.notify = function(msg) notified = msg end
+        vim.cmd("Gsearch")
+        vim.notify = orig
+        assert.is_truthy(notified and notified:match("no search running"))
+        assert.is_false(vim.wait(300, function() return panel.find_buf() ~= nil end, 20))
+    end)
+    it("sets the panel's filetype once it is named and `acwrite`", function()
+        local seen
+        local id = vim.api.nvim_create_autocmd("FileType", {
+            pattern  = "greplace",
+            callback = function(ev)
+                seen = { name = vim.api.nvim_buf_get_name(ev.buf), buftype = vim.bo[ev.buf].buftype }
+            end,
+        })
+        write_file("a.txt", { "alpha one" })
+        run("Gsearch alpha")
+        vim.api.nvim_del_autocmd(id)
+        assert.are.same({ name = "greplace://greplace-matches", buftype = "acwrite" }, seen)
     end)
 end)

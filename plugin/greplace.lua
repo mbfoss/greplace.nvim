@@ -44,7 +44,7 @@ vim.api.nvim_create_user_command("Greplace", function(opts)
         return greplace.run(cmd, args, cmd_opts)
     end)
 end, {
-    desc     = "The greplace panel: open, toggle, refresh, or fill from the quickfix list",
+    desc     = "The greplace panel: open, toggle, refresh, diff, or fill from the quickfix list",
     -- `nargs = "*"` rather than `"?"`: a second word is reported by the body
     -- as the error it is, rather than by Neovim as a bare "Too many arguments".
     nargs    = "*",

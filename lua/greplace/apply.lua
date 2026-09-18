@@ -113,13 +113,12 @@ local function apply_file(path, regions, result, keep)
     end
 end
 
---- Apply every region of an edited panel.
----@param regions greplace.Region[]  in panel order
----@return greplace.ApplyResult
-function M.run(regions)
-    ---@type greplace.ApplyResult
-    local result = { replaced = 0, files = 0, skipped = 0, removed = 0, entries = {} }
-
+--- Group regions by the file they belong to, each group ascending by source
+--- line, and the files in the order the panel first lists them.
+---@param regions greplace.Region[]
+---@return table<string, greplace.Region[]> by_file
+---@return string[] order
+local function group(regions)
     ---@type table<string, greplace.Region[]>
     local by_file, order = {}, {}
     for _, region in ipairs(regions) do
@@ -130,12 +129,23 @@ function M.run(regions)
         end
         table.insert(by_file[path], region)
     end
+    for _, path in ipairs(order) do
+        table.sort(by_file[path], function(a, b) return a.entry.lnum < b.entry.lnum end)
+    end
+    return by_file, order
+end
 
+--- Apply every region of an edited panel.
+---@param regions greplace.Region[]  in panel order
+---@return greplace.ApplyResult
+function M.run(regions)
+    ---@type greplace.ApplyResult
+    local result = { replaced = 0, files = 0, skipped = 0, removed = 0, entries = {} }
+
+    local by_file, order = group(regions)
     local keep = {}
     for _, path in ipairs(order) do
-        local file_regions = by_file[path]
-        table.sort(file_regions, function(a, b) return a.entry.lnum < b.entry.lnum end)
-        apply_file(path, file_regions, result, keep)
+        apply_file(path, by_file[path], result, keep)
     end
 
     for _, region in ipairs(regions) do
@@ -144,6 +154,87 @@ function M.run(regions)
         end
     end
     return result
+end
+
+---@class greplace.PreviewFile
+---@field path    string
+---@field relpath string
+---@field before  string[]  the file's text now: its buffer's, or the disk's
+---@field after   string[]  the same text with the file's edits applied
+
+---@class greplace.Preview
+---@field files   greplace.PreviewFile[]  files a write would change, in panel order
+---@field skipped { entry:greplace.Entry, reason:string }[]  edits a write would
+---                          leave out, and why
+
+--- The text of a file as a write would find it: its buffer's when it has one,
+--- otherwise the file on disk, read without loading it into a buffer -- a
+--- preview must leave no buffers behind. A trailing CR is dropped as a buffer
+--- with `fileformat=dos` drops it, and as the search dropped it from the text
+--- the panel shows.
+---@param path string
+---@return string[]? lines
+local function current_lines(path)
+    local bufnr = util.find_buf(path)
+    if bufnr then return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false) end
+    if vim.fn.filereadable(path) ~= 1 then return nil end
+    return vim.tbl_map(function(l) return (l:gsub("\r$", "")) end, vim.fn.readfile(path))
+end
+
+--- What `M.run` would do with these regions, done to copies: nothing is loaded
+--- and no buffer is changed. The same rules decide it -- an unedited or deleted
+--- match changes nothing, and one whose source line moved is skipped.
+---@param regions greplace.Region[]  in panel order
+---@return greplace.Preview
+function M.preview(regions)
+    ---@type greplace.Preview
+    local out = { files = {}, skipped = {} }
+
+    local by_file, order = group(regions)
+    for _, path in ipairs(order) do
+        local file_regions = by_file[path]
+        if vim.iter(file_regions):any(is_edit) then
+            local before = current_lines(path)
+            if not before then
+                for _, region in ipairs(file_regions) do
+                    if is_edit(region) then
+                        table.insert(out.skipped, { entry = region.entry, reason = "not readable" })
+                    end
+                end
+            else
+                local after   = vim.list_slice(before)
+                local changed = false
+                -- Filled bottom-up like the edits, so prepended to stay in
+                -- line order.
+                local skips   = {}
+                for i = #file_regions, 1, -1 do
+                    local region = file_regions[i]
+                    local entry  = region.entry
+                    if is_edit(region) then
+                        if before[entry.lnum] ~= entry.text then
+                            table.insert(skips, 1, { entry = entry, reason = "source changed" })
+                        else
+                            local tail = vim.list_slice(after, entry.lnum + 1)
+                            for j = #after, entry.lnum, -1 do after[j] = nil end
+                            vim.list_extend(after, region.lines)
+                            vim.list_extend(after, tail)
+                            changed = true
+                        end
+                    end
+                end
+                vim.list_extend(out.skipped, skips)
+                if changed then
+                    table.insert(out.files, {
+                        path    = path,
+                        relpath = file_regions[1].entry.relpath,
+                        before  = before,
+                        after   = after,
+                    })
+                end
+            end
+        end
+    end
+    return out
 end
 
 return M

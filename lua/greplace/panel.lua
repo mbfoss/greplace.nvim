@@ -662,26 +662,59 @@ local function splice(list, first, last, new)
     for i, line in ipairs(new) do list[first + i] = line end
 end
 
----@param on_write fun(bufnr:integer)
+---@param on_write  fun(bufnr:integer)  `:w` in the panel
+---@param on_delete fun()?  the panel was deleted or wiped out
 ---@return integer bufnr
-local function create_buf(on_write)
+local function create_buf(on_write, on_delete)
     -- Set here rather than at startup: the groups are `default` links, which a
     -- later `:colorscheme` clears, and nothing needs them before there is a
     -- panel to draw.
     M.setup_highlights()
 
-    local bufnr = vim.api.nvim_create_buf(false, false)
-    vim.api.nvim_buf_set_name(bufnr, _buffer_name)
-
     -- Defined with the line watch below, and called from the reload, which
     -- detaches it.
     ---@type fun()
     local watch
+    ---@type integer
+    local group
 
-    vim.bo[bufnr].buftype   = "acwrite"
-    vim.bo[bufnr].bufhidden = "hide"
-    vim.bo[bufnr].swapfile  = false
-    vim.bo[bufnr].filetype  = "greplace"
+    local bufnr
+    -- `acwrite`, where a scratch buffer is `nofile`: `:w` is how the edits are
+    -- applied. `hide`, so that closing the panel's window keeps the list.
+    -- The filetype is not among these options: they are set in no particular
+    -- order, and `FileType` handlers should find the buffer as it will stay,
+    -- `acwrite` and named, so it is set below, after the name.
+    bufnr = ui.create_scratch_buffer(false, {
+        buftype   = "acwrite",
+        bufhidden = "hide",
+    }, function()
+        -- The list ends with the buffer: nothing is left to apply, and the
+        -- search filling it has nowhere to land.
+        _state[bufnr] = nil
+        pcall(vim.api.nvim_del_augroup_by_id, group)
+        if on_delete then on_delete() end
+    end)
+    vim.api.nvim_buf_set_name(bufnr, _buffer_name)
+    vim.bo[bufnr].filetype = "greplace"
+
+    -- `:bdelete` on an unlisted buffer fires no `BufDelete`: it only unloads
+    -- it, leaving a husk -- empty, unwatched, still named like the panel --
+    -- that would be found and shown again as though it held a list. So an
+    -- unload is made a wipe, which the callback above does see. Not on the
+    -- spot: `:edit` unloads too, then refills the buffer through `BufReadCmd`
+    -- (below) before anything else runs, and a reload is not the panel's end;
+    -- an unload that is still one once the event loop comes round is.
+    vim.api.nvim_create_autocmd("BufUnload", {
+        buffer   = bufnr,
+        desc     = "greplace: a panel unloaded for good is wiped out",
+        callback = function()
+            vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(bufnr) and not vim.api.nvim_buf_is_loaded(bufnr) then
+                    pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+                end
+            end)
+        end,
+    })
     -- A line broken in the panel is always taken back, so indenting the new
     -- one is of no use -- and it does harm: Vim remembers having indented it,
     -- and on <Esc> deletes that "indent", which after the revert is the white
@@ -744,7 +777,7 @@ local function create_buf(on_write)
     -- a question to answer at that point -- and answering "yes" there would
     -- apply the edits to buffers that are about to be discarded. The panel is
     -- dropped instead, like the scratch buffer it is.
-    local group = vim.api.nvim_create_augroup("greplace.panel." .. bufnr, { clear = true })
+    group = vim.api.nvim_create_augroup("greplace.panel." .. bufnr, { clear = true })
     vim.api.nvim_create_autocmd("ExitPre", {
         group = group,
         desc  = "greplace: never prompt to save the panel on exit",
@@ -877,13 +910,6 @@ local function create_buf(on_write)
         })
     end
     watch()
-    vim.api.nvim_create_autocmd("BufWipeout", {
-        buffer   = bufnr,
-        callback = function()
-            _state[bufnr] = nil
-            pcall(vim.api.nvim_del_augroup_by_id, group)
-        end,
-    })
     return bufnr
 end
 
@@ -1123,10 +1149,10 @@ end
 
 --- Open the panel before there are any results, showing the query and that the
 --- search is running. `M.open` takes the same buffer over when it comes back.
----@param opts { query:string, root:string, flags:table?, height:integer, on_write:fun(bufnr:integer) }
+---@param opts { query:string, root:string, flags:table?, height:integer, on_write:fun(bufnr:integer), on_delete:fun()? }
 ---@return integer bufnr
 function M.open_loading(opts)
-    local bufnr   = M.find_buf() or create_buf(opts.on_write)
+    local bufnr   = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
     _state[bufnr] = {
         query   = opts.query,
         root    = opts.root,
@@ -1153,12 +1179,12 @@ end
 
 --- Open (or reuse) the panel for a result set.
 ---@param matches  greplace.Match[]
----@param opts     { query:string, root:string, flags:table?, height:integer, truncated:boolean?, source:string?, on_write:fun(bufnr:integer) }
+---@param opts     { query:string, root:string, flags:table?, height:integer, truncated:boolean?, source:string?, on_write:fun(bufnr:integer), on_delete:fun()? }
 ---@return integer bufnr
 ---@return string? err  the list could not be rendered; the panel shows why and
 ---                     holds nothing editable
 function M.open(matches, opts)
-    local bufnr = M.find_buf() or create_buf(opts.on_write)
+    local bufnr = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
     _state[bufnr] = {
         query     = opts.query,
         root      = opts.root,

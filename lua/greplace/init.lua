@@ -25,6 +25,10 @@ local M = {}
 --                             filled that, instead of from a search
 --   Greplace[!] refresh       run the list's search (or quickfix import)
 --                             again; `!` discards unapplied edits
+--   Greplace diff             preview, as a diff, what writing the panel would
+--                             change
+--   Greplace apply            apply the panel's edits, from any window; the
+--                             panel's `:w` does the same
 --
 -- The split is deliberate: `:Gsearch` is the one that produces a list, and
 -- `:Greplace` is what you do with the panel afterwards, so the panel's own
@@ -32,9 +36,10 @@ local M = {}
 --
 -- This module owns both command bodies, as `M.run_search` and `M.run`, plus
 -- the API they are a thin skin over (`M.open`, `M.open_qf`, `M.show`,
--- `M.toggle`, `M.cancel`, `M.refresh`); the commands themselves are registered
--- in `plugin/greplace.lua`, and the work lives in `greplace.rgflags` /
--- `greplace.search` / `greplace.qflist` / `greplace.panel` / `greplace.apply`.
+-- `M.toggle`, `M.cancel`, `M.refresh`, `M.diff`, `M.apply`); the commands
+-- themselves are registered in `plugin/greplace.lua`, and the work lives in
+-- `greplace.rgflags` / `greplace.search` / `greplace.qflist` / `greplace.panel`
+-- / `greplace.apply` / `greplace.preview`.
 -- ---------------------------------------------------------------------------
 
 local config = require("greplace.config").current
@@ -64,10 +69,27 @@ local function _notify(msg, level)
     vim.notify("greplace: " .. msg, level or vim.log.levels.INFO)
 end
 
+--- Apply the panel's edits to their source buffers and redraw the list from
+--- what landed. This is `:Greplace apply`, and the panel's `:w` calls it too.
+--- A panel with no list yet -- a search still running, or one that ended in a
+--- message -- has nothing in it to apply, and its status is left standing
+--- rather than redrawn as an empty list.
 ---@param bufnr integer
-local function on_write(bufnr)
+local function apply_edits(bufnr)
+    local state = panel.state(bufnr)
+    if not state or not state.lines or state.message then
+        vim.bo[bufnr].modified = false
+        _notify("no list to apply", vim.log.levels.WARN)
+        return
+    end
+
     local apply  = require("greplace.apply")
     local result = apply.run(panel.regions(bufnr))
+
+    -- A preview shows the edits as they were before this; it is out of date
+    -- now. Only looked up if one was ever opened.
+    local preview = package.loaded["greplace.preview"]
+    if preview then preview.close() end
 
     local render_err = panel.refresh(bufnr, result.entries)
     if render_err then
@@ -110,22 +132,14 @@ function M.open(query, opts)
         flags    = opts.flags,
         root     = root,
         height   = config.height,
-        on_write = on_write,
+        on_write  = apply_edits,
+        -- Deleting the panel ends the search that was filling it.
+        on_delete = abort,
     }
     -- Whatever was still running was searching for the previous query into
     -- this same buffer; drop it before the panel is retitled.
     abort()
     local bufnr = panel.open_loading(args)
-
-    -- Wiping the panel ends the search that was filling it. The augroup is
-    -- cleared per search, so the buffer never accumulates one autocommand per
-    -- `:Gsearch` (it is reused across them).
-    vim.api.nvim_create_autocmd("BufWipeout", {
-        group    = vim.api.nvim_create_augroup("greplace.search", { clear = true }),
-        buffer   = bufnr,
-        desc     = "greplace: cancel the search filling the panel",
-        callback = abort,
-    })
 
     _cancel = search.run(query, {
             cwd   = root,
@@ -177,7 +191,8 @@ function M.open_qf()
         source   = "quickfix",
         root     = root,
         height   = config.height,
-        on_write = on_write,
+        on_write  = apply_edits,
+        on_delete = abort,
     })
     if render_err then
         _notify(render_err, vim.log.levels.ERROR)
@@ -259,6 +274,30 @@ function M.refresh(opts)
     else
         M.open(state.query, { cwd = state.root, flags = state.flags })
     end
+end
+
+--- Show, as a diff, what writing the panel would change -- without changing
+--- anything, so the edits can be checked before they reach any buffer.
+---@return integer? bufnr  the preview's buffer; nil when there is nothing to show
+function M.diff()
+    local bufnr = panel.find_buf()
+    if not bufnr or not panel.state(bufnr) then
+        _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
+        return
+    end
+    local preview = require("greplace.apply").preview(panel.regions(bufnr))
+    return require("greplace.preview").open(preview)
+end
+
+--- Apply the panel's edits, as `:w` in the panel does, from any window: from
+--- the `:Greplace diff` preview once it looks right, or with the panel closed.
+function M.apply()
+    local bufnr = panel.find_buf()
+    if not bufnr or not panel.state(bufnr) then
+        _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
+        return
+    end
+    apply_edits(bufnr)
 end
 
 --- The query a `:Gsearch` given a range searches for. A range is what `:`
@@ -365,7 +404,7 @@ end
 
 --- The subcommands of `:Greplace`, in the order they are offered.
 ---@type string[]
-M.SUBCOMMANDS = { "open", "close", "toggle", "qf", "refresh" }
+M.SUBCOMMANDS = { "open", "close", "toggle", "qf", "refresh", "diff", "apply" }
 
 --- `:Greplace`'s implementation: what to do with the panel, `open` by default.
 --- It takes no query: `refresh` runs the list's own search again. The bang is
@@ -387,6 +426,10 @@ function M.run(_cmd, fargs, opts)
         M.open_qf()
     elseif sub == "refresh" then
         M.refresh({ force = opts.bang })
+    elseif sub == "diff" then
+        M.diff()
+    elseif sub == "apply" then
+        M.apply()
     else
         _notify(("unknown subcommand: %s (%s)")
             :format(sub, table.concat(M.SUBCOMMANDS, ", ")), vim.log.levels.ERROR)

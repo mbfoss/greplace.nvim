@@ -94,6 +94,12 @@ themselves, and nothing under `lua/greplace/` is loaded until one is first run.
 
   :Greplace refresh                   run the list’s search again (!
                                       discards unapplied edits)
+
+  :Greplace diff                      preview what writing the panel
+                                      would change, as a diff
+
+  :Greplace apply                     apply the panel’s edits, as :w in
+                                      it does
   -----------------------------------------------------------------------
 Two commands, split by what they do: `:Gsearch` is the one that produces a
 list, and `:Greplace` is what you do with the panel afterwards, so the
@@ -121,6 +127,18 @@ so the panel catches up with files changed since; a list from `:Greplace qf` is
 refilled from the quickfix list as it now stands. A panel holding unapplied
 edits is left alone, since the fresh list would drop them: write them first, or
 use `:Greplace! refresh` to discard them.
+
+`diff` shows what `:w` would do before it does it: every file with an edited
+match, as a unified diff of its text now against its text after the write, on a
+tab of its own; `q` closes it. It is worked out on copies, so nothing is
+applied and no file is loaded into a buffer to find out. A file that is open is
+diffed from its buffer, unsaved changes included, since that is what a write
+lands on. An edit the write would skip, because its source line has changed
+since the search, is listed at the top instead of in the diff.
+
+`apply` is `:w` in the panel, from wherever you are: from the preview once it
+looks right, or with the panel closed. Either one closes the preview, which is
+out of date once the edits have landed.
 
 
 :'<,'>GSEARCH: SEARCHING FOR THE SELECTION                                 *greplace-selection*
