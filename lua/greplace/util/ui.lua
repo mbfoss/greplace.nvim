@@ -185,10 +185,17 @@ end
 ---@param bufnr integer
 ---@param line? integer 1-based line number (nil = just open)
 ---@param col?  integer 0-based column (nil = column 0)
+---@param activate? boolean focus the target window (default true)
 ---@return number winid
-function M.smart_open_buffer(bufnr, line, col)
+function M.smart_open_buffer(bufnr, line, col, activate)
+    local cur_win = vim.api.nvim_get_current_win()
     local winid = _get_regular_window()
-    vim.api.nvim_set_current_win(winid)
+    if activate ~= false then
+        vim.api.nvim_set_current_win(winid)
+    elseif vim.api.nvim_win_is_valid(cur_win) then
+        -- `_get_regular_window` may have split one off and entered it.
+        vim.api.nvim_set_current_win(cur_win)
+    end
     vim.fn.win_execute(winid, "buffer " .. bufnr)
     _safe_set_cursor_pos(winid, line, col)
     return winid
