@@ -243,6 +243,44 @@ describe("panel editing", function()
         assert.equals(1, #child:notes())
     end)
 
+    it("lays out again only the anchors near a reverted change, and all of them right", function()
+        local texts = {}
+        for i = 1, 40 do texts[i] = ("line %02d"):format(i) end
+        -- Every anchor where a layout of the whole list would put it: listed
+        -- matches one per row, a removed one on the next listed one's row.
+        local misplaced = [[
+            local buf = vim.api.nvim_get_current_buf()
+            local st  = require("greplace.panel").state(buf)
+            local ns  = vim.api.nvim_get_namespaces()["greplace.anchor"]
+            local rows, row = {}, 0
+            for _, id in ipairs(st.order) do
+                if not st.hidden[id] then rows[id], row = row, row + 1 end
+            end
+            for i = #st.order, 1, -1 do
+                local id = st.order[i]
+                if rows[id] then row = rows[id] else rows[id] = row end
+            end
+            local bad = 0
+            for _, id in ipairs(st.order) do
+                local p = vim.api.nvim_buf_get_extmark_by_id(buf, ns, id, {})
+                if p[1] ~= rows[id] or p[2] ~= 0 then bad = bad + 1 end
+            end
+            return bad
+        ]]
+        child:open(texts)
+        child:lua([[
+            local set = vim.api.nvim_buf_set_extmark
+            _G.sets = 0
+            vim.api.nvim_buf_set_extmark = function(...) _G.sets = _G.sets + 1; return set(...) end
+        ]])
+        for _, keys in ipairs({ "5Gdd", "10Gdd", "4G8J", "20G5dd", "18G0lv4jd", "GoX<Esc>", "ggOX<Esc>" }) do
+            child:lua("_G.sets = 0")
+            child:feed(keys)
+            assert.equals(0, child:lua(misplaced), keys)
+            assert.is_true(child:lua("return _G.sets") < 20, keys)
+        end
+    end)
+
     it("takes back a join", function()
         child:open({ "one", "two", "three" })
         child:feed("ggJ")

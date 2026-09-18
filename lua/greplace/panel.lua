@@ -58,6 +58,8 @@ local _no_marker      = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker))
 ---@field flags   table?   `:Gsearch` flags the search was run with, so
 ---                        that re-running it means the same search
 ---@field entries table<integer, greplace.Entry>  keyed by anchor extmark id
+---@field order   integer[]  anchor extmark ids in listing order
+---@field index   table<integer, integer>  each anchor's position in `order`
 ---@field virt    table<integer, table[]>  each anchor's virtual text chunks
 ---@field hidden  table<integer, boolean>  anchors whose line has been removed
 ---@field truncated boolean  the search stopped at the match limit, so this is
@@ -269,25 +271,48 @@ end
 ---@param bufnr integer
 ---@param state greplace.PanelState
 ---@return table<integer, integer> rows  each anchor's row, keyed by extmark id
-local function relayout(bufnr, state)
-    local ids = vim.tbl_keys(state.entries)
-    table.sort(ids)
-    local rows, row = {}, 0
-    for _, id in ipairs(ids) do
-        if not state.hidden[id] then rows[id], row = row, row + 1 end
+---
+--- `from` and `hi` narrow that to the anchors a change can have moved: from
+--- the one at position `from` in `state.order`, which goes on row `lo`, up
+--- to the first match with a line past row `hi` that is already where it
+--- belongs -- as everything after it is then too. Without them, every anchor
+--- is laid out.
+---@param bufnr integer
+---@param state greplace.PanelState
+---@param from  integer?  position in `state.order` of the first anchor to lay out
+---@param lo    integer?  0-indexed row it goes on
+---@param hi    integer?  0-indexed last row a change reached, inclusive
+---@return table<integer, integer> rows  the new row of each anchor laid out,
+---                                      keyed by extmark id
+local function relayout(bufnr, state, from, lo, hi)
+    local order = state.order
+    local rows, row, last = {}, lo or 0, #order
+    for i = from or 1, #order do
+        local id = order[i]
+        if not state.hidden[id] then
+            if hi and row > hi then
+                local pos = vim.api.nvim_buf_get_extmark_by_id(bufnr, _ns, id, {})
+                if pos[1] == row and pos[2] == 0 then
+                    last = i - 1
+                    break
+                end
+            end
+            rows[id], row = row, row + 1
+        end
     end
-    for i = #ids, 1, -1 do
-        local id = ids[i]
+    -- A removed match sits on the next listed match's row, or past the last
+    -- line when there is none: where a removed line leaves its anchor.
+    for i = last, from or 1, -1 do
+        local id = order[i]
         if rows[id] then row = rows[id] else rows[id] = row end
     end
-    for _, id in ipairs(ids) do
+    for i = from or 1, last do
+        local id = order[i]
         vim.api.nvim_buf_set_extmark(bufnr, _ns, rows[id], 0, {
             id            = id,
             virt_text     = not state.hidden[id] and state.virt[id] or nil,
             virt_text_pos = "inline",
             right_gravity = false,
-            -- A removed match with no match after it is parked past the last
-            -- line, where a removed last line leaves its anchor.
             strict        = false,
         })
     end
@@ -335,6 +360,19 @@ local function guard_lines(bufnr, lo, hi)
         end
     end
 
+    -- The anchors from the owner of row `lo - 1` up are where they belong:
+    -- no change reached them. Of the anchors on a row, the owner is the one
+    -- listed last (see `empty_anchors`).
+    local from = 1
+    if lo > 0 then
+        local owner = 0
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, { lo - 1, 0 }, { lo - 1, -1 }, {})) do
+            owner = math.max(owner, m[1])
+        end
+        from = (state.index[owner] or 0) + 1
+    end
+    local total = vim.api.nvim_buf_line_count(bufnr)
+
     pcall(vim.cmd.undojoin)
     state.reverting = true
     local ok, err = pcall(function()
@@ -346,9 +384,12 @@ local function guard_lines(bufnr, lo, hi)
     state.reverting = false
     if not ok then error(err) end
 
-    local rows = relayout(bufnr, state)
+    -- The revert changed no line past row `hi` but moved them all by the
+    -- lines it put back or took away.
+    local rows = relayout(bufnr, state, from, lo,
+        hi + vim.api.nvim_buf_line_count(bufnr) - total)
     if cur then
-        local row  = at and rows[at] or 0
+        local row = at and (rows[at] or vim.api.nvim_buf_get_extmark_by_id(bufnr, _ns, at, {})[1]) or 0
         local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
         pcall(vim.api.nvim_win_set_cursor, 0, { row + 1, math.min(offset, #text) })
     end
@@ -952,6 +993,8 @@ local function render(bufnr, matches)
 
     local width   = location_width(matches)
     state.entries = {}
+    state.order   = {}
+    state.index   = {}
     state.virt    = {}
     state.hidden  = {}
     state.changed = {}
@@ -1009,6 +1052,8 @@ local function render(bufnr, matches)
         end
         state.virt[id]    = virt
         state.hidden[id]  = false
+        state.order[row]  = id
+        state.index[id]   = row
         state.entries[id] = {
             path    = m.path,
             relpath = m.relpath,
@@ -1088,6 +1133,8 @@ function M.open_loading(opts)
         flags   = opts.flags,
         source  = "search",
         entries = {},
+        order   = {},
+        index   = {},
         virt    = {},
         hidden  = {},
         truncated = false,
@@ -1120,6 +1167,8 @@ function M.open(matches, opts)
         -- search ("search", the default) or the quickfix list ("quickfix").
         source    = opts.source or "search",
         entries   = {},
+        order     = {},
+        index     = {},
         virt      = {},
         hidden    = {},
         truncated = opts.truncated or false,
