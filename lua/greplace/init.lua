@@ -4,9 +4,9 @@ local M = {}
 -- greplace
 --
 -- `:Gsearch <query>` greps the working tree and collects every matching line
--- into a `greplace://replace` split. The lines are plain, editable text (the
--- `file:line` prefix is virtual), and writing the buffer pushes each edited
--- line back to its source, in buffers, never to disk.
+-- into a `greplace://greplace-matches` split. The lines are plain, editable
+-- text (the `file:line` prefix is virtual), and writing the buffer pushes each
+-- edited line back to its source, in buffers, never to disk.
 --
 --   Gsearch <query>           grep for <query>, literally
 --   Gsearch <flags> -- <q>    the same search with `greplace.rgflags`'s flags

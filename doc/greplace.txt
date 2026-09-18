@@ -22,10 +22,10 @@ Project-wide search and replace by editing the grep results.
 <
 
 greps the working tree and collects every matching line into a split named
-`greplace://replace`. Each line is the matched line itself: plain, editable
-text. The `file:line` shown in front of it is _virtual_: it is not part of the
-line, it cannot be typed over, and it is what tells the plugin where the line
-came from.
+`greplace://greplace-matches`. Each line is the matched line itself: plain,
+editable text. The `file:line` shown in front of it is _virtual_: it is not
+part of the line, it cannot be typed over, and it is what tells the plugin
+where the line came from.
 
 Edit the lines however you like (`:%s/…`, visual block, macros, by hand) and
 write the buffer:

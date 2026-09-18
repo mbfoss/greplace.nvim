@@ -1,7 +1,7 @@
 local M = {}
 
 -- ---------------------------------------------------------------------------
--- The `greplace://replace` scratch buffer.
+-- The `greplace://greplace-matches` scratch buffer.
 --
 -- Every line holds one matched line verbatim, so it can be edited as ordinary
 -- text. The `file:line` location is not part of the line: it is inline virtual
@@ -20,7 +20,7 @@ local util     = require("greplace.util")
 local ui       = require("greplace.util.ui")
 local strutil  = require("greplace.util.strutil")
 
-local _NAME    = "greplace://replace"
+local _buffer_name    = "greplace://greplace-matches"
 local _ns      = vim.api.nvim_create_namespace("greplace.anchor")
 local _ns_hl   = vim.api.nvim_create_namespace("greplace.match")
 local _ns_st   = vim.api.nvim_create_namespace("greplace.status")
@@ -93,7 +93,7 @@ local _state = {}
 ---@return integer? bufnr
 function M.find_buf()
     for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_get_name(bufnr):sub(- #_NAME) == _NAME
+        if vim.api.nvim_buf_get_name(bufnr):sub(- #_buffer_name) == _buffer_name
             and vim.api.nvim_buf_is_valid(bufnr) then
             return bufnr
         end
@@ -557,7 +557,7 @@ local function goto_change(bufnr, dir)
     local state = _state[bufnr]
     if not state then return end
     if not state.stats or state.stats.changes == 0 then
-        vim.notify("greplace: nothing has been edited", vim.log.levels.WARN)
+        vim.api.nvim_echo({ { "greplace: nothing has been edited" } }, false, {})
         return
     end
 
@@ -567,7 +567,7 @@ local function goto_change(bufnr, dir)
     -- than staying put. With no row left on that side there is nothing to ask
     -- for, and asking anyway would be a range starting outside the buffer.
     if (dir > 0 and row >= last) or (dir < 0 and row <= 0) then
-        vim.notify("greplace: no more edits", vim.log.levels.WARN)
+        vim.api.nvim_echo({ { "greplace: no more edits" } }, false, {})
         return
     end
 
@@ -593,7 +593,7 @@ local function goto_change(bufnr, dir)
         end
     end
     if not target then
-        vim.notify("greplace: no more edits", vim.log.levels.WARN)
+        vim.api.nvim_echo({ { "greplace: no more edits" } }, false, {})
         return
     end
     -- A jump, so `''` and `<C-o>` come back to where the cursor was.
@@ -628,7 +628,7 @@ local function create_buf(on_write)
     M.setup_highlights()
 
     local bufnr = vim.api.nvim_create_buf(false, false)
-    vim.api.nvim_buf_set_name(bufnr, _NAME)
+    vim.api.nvim_buf_set_name(bufnr, _buffer_name)
 
     -- Defined with the line watch below, and called from the reload, which
     -- detaches it.
@@ -672,9 +672,10 @@ local function create_buf(on_write)
         end,
     })
     -- `:edit` reloads the buffer: Neovim empties it and leaves the filling to
-    -- `BufReadCmd`. There is no file behind `greplace://replace` to fill it
-    -- from -- the panel is only ever written into by a search -- so the reload
-    -- leaves it empty, and everything drawn on the list it held goes with it.
+    -- `BufReadCmd`. There is no file behind `greplace://greplace-matches` to
+    -- fill it from -- the panel is only ever written into by a search -- so the
+    -- reload leaves it empty, and everything drawn on the list it held goes
+    -- with it.
     -- Left behind, the anchors would all collapse onto the one remaining row
     -- and draw every `file:line` in the panel stacked on it, and a write would
     -- take that row's text for all of their matches.
