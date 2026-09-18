@@ -71,6 +71,9 @@ function M.create_window(buffer, enter, config, on_close)
     return win, augroup
 end
 
+--- A scratch buffer; `buffer_options` override the defaults. `filetype` is set
+--- last, after `on_delete` is hooked up, so `FileType` handlers see the final
+--- options and a deletion from one still reaches `on_delete`.
 ---@param listed boolean
 ---@param buffer_options vim.bo?
 ---@param on_delete function?
@@ -89,6 +92,8 @@ function M.create_scratch_buffer(listed, buffer_options, on_delete)
             bo[k] = v
         end
     end
+    local filetype = bo.filetype
+    bo.filetype = nil
     for k, v in pairs(bo) do
         vim.bo[buf][k] = v
     end
@@ -100,6 +105,9 @@ function M.create_scratch_buffer(listed, buffer_options, on_delete)
                 on_delete()
             end,
         })
+    end
+    if filetype then
+        vim.bo[buf].filetype = filetype
     end
     return buf
 end

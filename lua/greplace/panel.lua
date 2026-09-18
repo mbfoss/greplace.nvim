@@ -681,9 +681,8 @@ local function create_buf(on_write, on_delete)
     local bufnr
     -- `acwrite`, where a scratch buffer is `nofile`: `:w` is how the edits are
     -- applied. `hide`, so that closing the panel's window keeps the list.
-    -- The filetype is not among these options: they are set in no particular
-    -- order, and `FileType` handlers should find the buffer as it will stay,
-    -- `acwrite` and named, so it is set below, after the name.
+    -- The filetype is set below, once the buffer is named: `FileType`
+    -- handlers should find it as it will stay.
     bufnr = ui.create_scratch_buffer(false, {
         buftype   = "acwrite",
         bufhidden = "hide",
