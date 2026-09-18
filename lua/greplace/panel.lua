@@ -73,6 +73,11 @@ local _no_marker      = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker))
 ---                        row `first` replaced `old`
 ---@field reverting boolean?  `guard_lines` is putting changes back, which are
 ---                        not themselves changes to record
+---@field seq      integer?  the undo state (`seq_cur`) the last check saw
+---@field seq_last integer?  the newest undo state (`seq_last`) the last check saw
+---@field layouts  table<integer, table<integer, true>>?  the anchors hidden in
+---                        each undo state, keyed by `seq_cur`, for putting the
+---                        anchors back after an undo or redo
 ---@field stats   greplace.Stats?  the winbar's counts; set once a result list
 ---                        is rendered
 ---@field per_file table<string, integer>?  how many of each file's matches
@@ -350,6 +355,53 @@ local function guard_lines(bufnr, lo, hi)
     vim.api.nvim_echo({ { "greplace: panel lines cannot be added or joined; change reverted",
         "WarningMsg" } }, false, {})
     return true
+end
+
+--- Where the buffer stands in its undo history.
+---@param bufnr integer
+---@return integer seq_cur
+---@return integer seq_last
+local function undo_seq(bufnr)
+    local tree = vim.fn.undotree(bufnr)
+    return tree.seq_cur, tree.seq_last
+end
+
+--- Note which anchors are hidden in the undo state the buffer is in, for
+--- `restore_layout` to go back to.
+---@param state greplace.PanelState
+---@param seq   integer
+local function save_layout(state, seq)
+    local hidden = {}
+    for id, hide in pairs(state.hidden) do
+        if hide then hidden[id] = true end
+    end
+    state.layouts[seq] = hidden
+end
+
+--- Put the anchors back after an undo or redo. Every undo state holds one line
+--- per match -- a change that broke that was reverted within its own undo
+--- block -- but undo and redo replay a reverted change and its revert without
+--- the `relayout` that followed them, leaving anchors on the wrong rows or
+--- part-way along one. Reverting that would be wrong twice over: the lines
+--- are right, and the revert would be a new change, branching the undo tree
+--- off the state `u` or `<C-r>` just reached. So the anchors are laid out
+--- afresh instead, hiding the matches that were hidden in that state.
+---@param bufnr integer
+---@param state greplace.PanelState
+---@param seq   integer
+local function restore_layout(bufnr, state, seq)
+    local hidden = state.layouts[seq]
+    if hidden then
+        for id in pairs(state.entries) do
+            local hide = hidden[id] == true
+            if state.hidden[id] ~= hide then
+                state.hidden[id] = hide
+                tally(state, id, hide and -1 or 1)
+            end
+        end
+    end
+    relayout(bufnr, state)
+    redraw(bufnr, 0, vim.api.nvim_buf_line_count(bufnr))
 end
 
 ---@class greplace.Stats
@@ -742,11 +794,28 @@ local function create_buf(on_write)
                     pending = nil
                     local st = _state[bufnr]
                     if not st or not vim.api.nvim_buf_is_valid(bufnr) then return end
-                    -- Before the redraw, which would record the broken state's
-                    -- removed lines as the ones to keep hidden. A revert is a
-                    -- change of its own, which gets a pass of its own.
-                    if guard_lines(bufnr, lo, hi) then return end
-                    redraw(bufnr, lo, hi)
+                    -- An undo or redo moves to another undo state without
+                    -- adding one; a new change always adds one.
+                    local seq, seq_last = undo_seq(bufnr)
+                    if st.layouts and seq_last == st.seq_last and seq ~= st.seq then
+                        st.changes = {}
+                        if is_broken(bufnr, lo, hi) then
+                            restore_layout(bufnr, st, seq)
+                        else
+                            redraw(bufnr, lo, hi)
+                        end
+                    else
+                        -- Before the redraw, which would record the broken
+                        -- state's removed lines as the ones to keep hidden. A
+                        -- revert is a change of its own, which gets a pass of
+                        -- its own.
+                        if guard_lines(bufnr, lo, hi) then return end
+                        redraw(bufnr, lo, hi)
+                    end
+                    if st.layouts then
+                        st.seq, st.seq_last = seq, seq_last
+                        save_layout(st, seq)
+                    end
                     if st.stats then set_winbar(bufnr) end
                 end)
             end,
@@ -876,6 +945,8 @@ local function render(bufnr, matches)
     state.changed = {}
     state.lines   = lines
     state.changes = {}
+    state.seq, state.seq_last = undo_seq(bufnr)
+    state.layouts = { [state.seq] = {} }
     state.stats   = { files = 0, lines = 0, changes = 0 }
     state.per_file = {}
 
