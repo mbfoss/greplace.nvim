@@ -315,8 +315,6 @@ local function guard_lines(bufnr, lo, hi)
     if not reshaped or not next(state.entries) or not is_broken(bufnr, lo, hi) then
         return false
     end
-    vim.notify("greplace: panel lines cannot be added or joined; change reverted",
-        vim.log.levels.WARN)
 
     -- Where the cursor goes: as far into its match's line as it is now, the
     -- match being the last one to start at or before it.
@@ -349,6 +347,8 @@ local function guard_lines(bufnr, lo, hi)
         local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
         pcall(vim.api.nvim_win_set_cursor, 0, { row + 1, math.min(offset, #text) })
     end
+    vim.api.nvim_echo({ { "greplace: panel lines cannot be added or joined; change reverted",
+        "WarningMsg" } }, false, {})
     return true
 end
 

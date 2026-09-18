@@ -26,6 +26,9 @@ local function spawn()
         -- Warnings are collected rather than drawn, for the specs to read.
         _G.notes = {}
         vim.notify = function(msg) table.insert(_G.notes, msg) end
+        vim.api.nvim_echo = function(chunks)
+            table.insert(_G.notes, table.concat(vim.tbl_map(function(c) return c[1] end, chunks)))
+        end
     ]], _root)
     return self
 end
