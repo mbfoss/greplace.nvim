@@ -1527,6 +1527,21 @@ function M.refresh(bufnr, entries)
     end
 end
 
+--- Redraw the markers and counts after a write, leaving the text and undo
+--- history alone: `u` then walks back to the pre-write text, which differs from
+--- the entries `apply.run` restated, so writing again reverts the source.
+---@param bufnr integer
+function M.settle(bufnr)
+    local state = _state[bufnr]
+    if not state or not state.stats then return end
+    -- The highlighted query hits belong to the text as searched, not to what
+    -- has been written over it since.
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+    redraw(bufnr, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1))
+    vim.bo[bufnr].modified = false
+    set_winbar(bufnr)
+end
+
 --- Read the edited buffer back as one replacement region per anchor: the lines
 --- from an anchor's row up to the next anchor's row. A region of several lines
 --- splits the source line; an empty region -- the user deleted it from the

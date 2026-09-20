@@ -91,11 +91,9 @@ local function apply_edits(bufnr)
     local preview = package.loaded["greplace.preview"]
     if preview then preview.close() end
 
-    local render_err = panel.refresh(bufnr, result.entries)
-    if render_err then
-        _notify("could not redraw the list: " .. render_err, vim.log.levels.ERROR)
-        return
-    end
+    -- Redrawn in place rather than rebuilt, so that `u` still walks back over
+    -- the write and writing again reverts it.
+    panel.settle(bufnr)
 
     local msg
     if result.replaced > 0 then
