@@ -613,7 +613,7 @@ end
 ---                     change, and what the caller has to do to make an edit
 ---                     of its own is not for the changes that need none
 ---@return boolean repaired
----@return boolean edited  and whether any line had to be rewritten for it
+---@return boolean? edited  and whether any line had to be rewritten for it
 local function repair(bufnr, lo, hi, about)
     local state = _state[bufnr]
     if not state or not state.stats then return false end
@@ -1041,16 +1041,28 @@ local function create_buf(on_write, on_delete)
     })
     -- `:edit` reloads the buffer: Neovim empties it and leaves the filling to
     -- `BufReadCmd`. There is no file behind `greplace://greplace-matches` to
-    -- fill it from -- the panel is only ever written into by a search -- so the
-    -- reload leaves it empty, and everything drawn on the list it held goes
-    -- with it.
-    -- Left behind, the anchors would all collapse onto the one remaining row
-    -- and draw every `file:line` in the panel stacked on it, and a write would
-    -- take that row's text for all of their matches.
+    -- fill it from, so a panel holding a list is refilled from the lines the
+    -- search stored, which is also how `:e` throws away unapplied edits.
+    -- Anything else -- a panel with no list to refill from -- is left empty
+    -- with everything drawn on it gone, since anchors left behind would all
+    -- collapse onto the one remaining row and a write would take that row's
+    -- text for all of their matches.
     vim.api.nvim_create_autocmd("BufReadCmd", {
         buffer = bufnr,
-        desc   = "greplace: a reload leaves an empty panel, not a stale one",
+        desc   = "greplace: a reload refills the panel from the stored lines",
         callback = function()
+            local state = _state[bufnr]
+            if state and state.stats then
+                local entries = {}
+                for _, id in ipairs(state.order) do
+                    entries[#entries + 1] = state.entries[id]
+                end
+                vim.bo[bufnr].modifiable = true
+                if not M.refresh(bufnr, entries) then
+                    watch()
+                    return
+                end
+            end
             _state[bufnr] = nil
             vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
             vim.api.nvim_buf_clear_namespace(bufnr, _ns_bounds, 0, -1)
