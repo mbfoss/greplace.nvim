@@ -1,7 +1,53 @@
--- The panel's marks: an anchor and a bounds extmark per match, and what keeps
--- them true to the buffer's lines -- the repair of a change that broke one line
--- per match, and the laying out again after an undo or a redo. The design is
--- described at the top of `greplace.panel`.
+-- ---------------------------------------------------------------------------
+-- The `greplace://greplace-matches` scratch buffer.
+--
+-- Every line holds one matched line verbatim, so it can be edited as ordinary
+-- text. The `file:line` location is not part of the line: it is inline virtual
+-- text on an extmark anchored at the start of the line. That anchor is the
+-- record of the list -- which match a row belongs to, and whether a match
+-- still has a row at all -- and `M.regions()` reads it back at write time. It
+-- draws, so it keeps the plain gravity that leaves it in front of a line
+-- whatever is typed there.
+--
+-- A second extmark, drawing nothing, spans each match's text from its first
+-- byte to its last. Its gravity points inward -- the start stays with the text
+-- to its right, the end with the text to its left -- so it stays glued to the
+-- text it was set around rather than growing with what is typed at either end.
+-- That is what makes a change that broke the panel's one line per match
+-- readable off the marks alone, and repairable without anything being
+-- remembered on the side (`repair`):
+--
+--   * a match's text ending on a later row than it starts -- its line was
+--     broken in two, or a line was put in front of it: join the rows back up;
+--   * two matches' text starting on one row -- their lines were joined: split
+--     the row where the second one starts, dropping whatever the join itself
+--     left at the seam (`J` inserts a space);
+--   * a row no match's text reaches -- a line was added: delete it.
+--
+-- A repair is joined to the change that made it necessary (`undojoin`), so
+-- every undo state holds one line per match and undo and redo need no help of
+-- their own.
+--
+-- The anchor follows, put back on the row and column its match's text says it
+-- belongs on. The bounds are put back likewise once an edit has landed
+-- (`redraw`), so neither mark drifts from the line for longer than a keystroke.
+--
+-- Undo and redo are the one change no line is touched for: every state the
+-- undo tree holds is one the panel put in shape when it was made, so its text
+-- is right by definition -- while its marks may not be, a replayed change
+-- being whole lines replaced, which drags the marks inside them to one row.
+-- There the marks are laid out from the listing instead (`restore_marks`),
+-- which is what the two integers of undo state in `PanelState` are for.
+--
+-- The anchor spans its whole line (`invalidate`), so deleting the line hides
+-- the anchor rather than leaving it stacked on the next one's row, and the
+-- mark alone says whether the match still has a line. Undo and redo restore an
+-- anchor's position and its validity along with the text (`undo_restore`), so
+-- a match removed in one undo state is removed again whenever that state is
+-- returned to, with no record of the states kept on the side.
+--
+-- A line the user has edited is marked in front of its `│`.
+-- ---------------------------------------------------------------------------
 
 local _ns              = vim.api.nvim_create_namespace("greplace.anchor")
 -- The bounds of each match's text, keyed by its anchor's id.

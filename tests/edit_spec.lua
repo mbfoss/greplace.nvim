@@ -429,6 +429,20 @@ describe("panel editing", function()
         assert.is_true(child:lua("return vim.wo.winbar ~= ''"))
     end)
 
+    it("can be shown again after a reload left it with no list", function()
+        local buf = child:lua([[
+            local panel = require("greplace.panel")
+            local buf = panel.open_loading({
+                query = "q", root = "/x", height = 10, on_write = function() end,
+            })
+            vim.cmd("edit!")
+            vim.cmd("new")
+            panel.close(buf)
+            return buf
+        ]])
+        assert.is_true(child:lua("return (pcall(require('greplace.panel').show, (...), 10))", buf))
+    end)
+
     it("takes a new list in a reloaded panel", function()
         local buf = child:open({ "one", "two" })
         child:feed(":edit!<CR>")

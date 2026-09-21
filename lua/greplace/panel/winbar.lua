@@ -29,10 +29,10 @@ end
 --- `status` stands in while there is nothing to count -- the search is still
 --- running, or it produced no list.
 ---@param bufnr  integer
----@param state  greplace.PanelState
+---@param state  greplace.PanelState?  nil for a buffer holding no panel
 ---@param status string?
 function M.set_winbar(bufnr, state, status)
-    if not config.winbar then return end
+    if not config.winbar or not state then return end
 
     -- A final message outlives the buffer write that showed it, so that any
     -- redraw of the winbar puts it back rather than the counts of an empty

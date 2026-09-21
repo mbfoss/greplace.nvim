@@ -224,6 +224,6 @@ M.ns_hl = _ns_hl
 M.clear_all = clear_all
 M.render = render
 M.set_status = set_status
-M.failed = render_failed
+M.render_failed = render_failed
 
 return M
