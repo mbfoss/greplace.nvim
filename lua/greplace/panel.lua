@@ -128,6 +128,12 @@ local _no_marker        = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker
 ---@type table<integer, greplace.PanelState>
 local _state            = {}
 
+-- Per panel buffer: drops the rows its line watch has queued for a pass. A
+-- render replaces every line, which queues a pass over the whole list that has
+-- nothing to find in what was just laid out.
+---@type table<integer, fun()>
+local _drop_pending      = {}
+
 ---@class greplace.Region
 ---@field entry greplace.Entry
 ---@field lines string[]  replacement text: 0 lines leaves the source alone
@@ -937,20 +943,31 @@ local function goto_change(bufnr, dir)
     -- next one, so an edited row can be reached twice over; being in order,
     -- those repeats are neighbours, and comparing against the row in hand is
     -- enough to count it once.
-    local from         = dir > 0 and { row + 1, 0 } or { row - 1, -1 }
-    local to           = dir > 0 and -1 or 0
-    local left, target = vim.v.count1, nil
-    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, from, to,
-        { details = true })) do
-        -- A removed match keeps its changed flag but no row: its anchor is
-        -- stranded on whichever line is next.
-        if state.changed[mark[1]] and not is_hidden(mark) and mark[2] ~= target then
-            target = mark[2]
-            left   = left - 1
-            -- The rest of the walk is what a count asked for; the edits beyond
-            -- it are no business of this one.
-            if left == 0 then break end
+    --
+    -- The API hands back the whole range it is asked for, so it is asked for a
+    -- `limit` of it at a time, doubling until the count is met or the range
+    -- runs out.
+    local from  = dir > 0 and { row + 1, 0 } or { row - 1, -1 }
+    local to    = dir > 0 and -1 or 0
+    local limit = 64
+    local left, target
+    while true do
+        left, target = vim.v.count1, nil
+        local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, from, to,
+            { details = true, limit = limit })
+        for _, mark in ipairs(marks) do
+            -- A removed match keeps its changed flag but no row: its anchor is
+            -- stranded on whichever line is next.
+            if state.changed[mark[1]] and not is_hidden(mark) and mark[2] ~= target then
+                target = mark[2]
+                left   = left - 1
+                -- The rest of the walk is what a count asked for; the edits
+                -- beyond it are no business of this one.
+                if left == 0 then break end
+            end
         end
+        if left == 0 or #marks < limit then break end
+        limit = limit * 2
     end
     if not target then
         vim.api.nvim_echo({ { "greplace: no more edits" } }, false, {})
@@ -1025,6 +1042,7 @@ local function create_buf(on_write, on_delete)
         -- The list ends with the buffer: nothing is left to apply, and the
         -- search filling it has nowhere to land.
         _state[bufnr] = nil
+        _drop_pending[bufnr] = nil
         pcall(vim.api.nvim_del_augroup_by_id, group)
         if on_delete then on_delete() end
     end)
@@ -1265,6 +1283,7 @@ local function create_buf(on_write, on_delete)
             end,
         })
     end
+    _drop_pending[bufnr] = function() pending = nil end
     watch()
     return bufnr
 end
@@ -1377,8 +1396,9 @@ local function render(bufnr, matches)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
     set_lines_no_undo(bufnr, lines)
+    if _drop_pending[bufnr] then _drop_pending[bufnr]() end
 
-    local width               = location_width(matches)
+    local width              = location_width(matches)
     state.entries             = {}
     state.order               = {}
     state.index               = {}
