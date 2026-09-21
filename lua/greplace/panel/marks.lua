@@ -46,18 +46,14 @@
 -- a match removed in one undo state is removed again whenever that state is
 -- returned to, with no record of the states kept on the side.
 --
--- A line the user has edited is marked in front of its `│`.
+-- Showing that a line has been edited is not this module's business: `redraw`
+-- says when a line starts or stops differing from its rendered text, and
+-- `greplace.panel.render` draws the marker.
 -- ---------------------------------------------------------------------------
 
 local _ns              = vim.api.nvim_create_namespace("greplace.anchor")
 -- The bounds of each match's text, keyed by its anchor's id.
 local _ns_bounds       = vim.api.nvim_create_namespace("greplace.bounds")
-
--- Drawn in front of the `│` of a match whose line has been edited, so that the
--- lines a write would rewrite stand out from the column alone. Every row
--- reserves its width, so the `│` stays aligned whichever rows carry it.
-local _changed_marker  = "•"
-local _no_marker       = string.rep(" ", vim.api.nvim_strwidth(_changed_marker))
 
 --- Set (or move) an anchor, spanning the text of row `row`.
 ---
@@ -165,19 +161,6 @@ local function tally(state, id, n)
     end
 end
 
---- Show or clear an anchor's changed marker.
----@param bufnr   integer
----@param state   greplace.PanelState
----@param id      integer  anchor extmark id
----@param row     integer
----@param changed boolean
-local function set_marker(bufnr, state, id, row, changed)
-    local virt = state.virt[id]
-    -- The marker is the chunk just before the `│`, the last one.
-    virt[#virt - 1][1] = changed and _changed_marker or _no_marker
-    set_anchor(bufnr, state, id, row)
-end
-
 --- Bring the anchors on rows `lo`..`hi` up to date with their lines, along
 --- with the winbar's counts. A change to those rows cannot give a line to, or
 --- take one from, an anchor on any other row -- row `hi` included, being where
@@ -186,8 +169,9 @@ end
 --- Hiding a removed match's location needs nothing done here: its anchor's
 --- span went with the line, and an invalid mark draws nothing. What is left is
 --- the bookkeeping the marks cannot do -- the winbar's counts following a
---- match out of the list and back in -- and the changed marker, which shows
---- while a line no longer holds the text it was rendered with.
+--- match out of the list and back in -- and telling the caller when a line
+--- starts or stops holding the text it was rendered with, so that it can show
+--- it (`on_changed`).
 ---
 --- An extmark is only re-set when what it draws changes: this runs on every
 --- edit, and re-setting even a handful of anchors per keystroke is not free.
@@ -195,7 +179,10 @@ end
 ---@param state greplace.PanelState
 ---@param lo    integer  0-indexed
 ---@param hi    integer  0-indexed, inclusive
-local function redraw(bufnr, state, lo, hi)
+---@param on_changed fun(bufnr:integer, state:greplace.PanelState, id:integer, row:integer, changed:boolean)
+---                  called when the line of anchor `id`, now on row `row`,
+---                  differs from its rendered text (`changed`) or is back to it
+local function redraw(bufnr, state, lo, hi, on_changed)
     if not state.stats then return end
 
     local total = vim.api.nvim_buf_line_count(bufnr)
@@ -216,7 +203,7 @@ local function redraw(bufnr, state, lo, hi)
                 if changed ~= (state.changed[id] == true) then
                     state.changed[id] = changed or nil
                     state.stats.changes = state.stats.changes + (changed and 1 or -1)
-                    set_marker(bufnr, state, id, row, changed)
+                    on_changed(bufnr, state, id, row, changed)
                 end
                 -- And the bounds back around the line, which the edit may
                 -- have grown or shrunk at either end without moving them.
@@ -673,7 +660,6 @@ end
 return {
     ns              = _ns,
     ns_bounds       = _ns_bounds,
-    no_marker       = _no_marker,
     set_anchor      = set_anchor,
     set_bounds      = set_bounds,
     is_hidden       = is_hidden,

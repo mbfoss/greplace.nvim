@@ -487,7 +487,7 @@ local function create_buf(on_write, on_delete)
                     -- state have moved since it was read above.
                     if repaired then seq, seq_last = undo_seq(bufnr) end
                     st.seq, st.seq_last = seq, seq_last
-                    redraw(bufnr, st, lo, hi)
+                    redraw(bufnr, st, lo, hi, draw.set_marker)
                     if st.stats then set_winbar(bufnr, st) end
                 end)
             end,
@@ -685,7 +685,8 @@ function M.settle(bufnr)
     -- The highlighted query hits belong to the text as searched, not to what
     -- has been written over it since.
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
-    redraw(bufnr, state, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1))
+    redraw(bufnr, state, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1),
+        draw.set_marker)
     vim.bo[bufnr].modified = false
     set_winbar(bufnr, state)
 end

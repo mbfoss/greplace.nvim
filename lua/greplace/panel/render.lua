@@ -6,7 +6,6 @@ local strutil       = require("greplace.util.strutil")
 local marks         = require("greplace.panel.marks")
 local winbar        = require("greplace.panel.winbar")
 
-local _no_marker    = marks.no_marker
 local set_anchor    = marks.set_anchor
 local set_bounds    = marks.set_bounds
 local tally         = marks.tally
@@ -36,6 +35,25 @@ end
 -- colorscheme can leave looking like the plain one.
 local _buffer_indicator = "≡ "
 local _no_indicator     = string.rep(" ", vim.fn.strdisplaywidth(_buffer_indicator))
+
+-- Drawn in front of the `│` of a match whose line has been edited, so that the
+-- lines a write would rewrite stand out from the column alone. Every row
+-- reserves its width, so the `│` stays aligned whichever rows carry it.
+local _changed_marker   = "•"
+local _no_marker        = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker))
+
+--- Show or clear an anchor's changed marker.
+---@param bufnr   integer
+---@param state   greplace.PanelState
+---@param id      integer  anchor extmark id
+---@param row     integer
+---@param changed boolean
+local function set_marker(bufnr, state, id, row, changed)
+    local virt = state.virt[id]
+    -- The marker is the chunk just before the `│`, the last one.
+    virt[#virt - 1][1] = changed and _changed_marker or _no_marker
+    set_anchor(bufnr, state, id, row)
+end
 
 --- Width of the `file:line` column: the widest location in the list, but never
 --- more than `path_width` -- one very deep path must not push every line of the
@@ -91,6 +109,8 @@ local function render(bufnr, state, matches)
     state.hidden              = {}
     state.changed             = {}
     state.ticks               = 0
+    -- A status from before is not this list's.
+    state.message             = nil
     state.seq, state.seq_last = undo_seq(bufnr)
     state.stats               = { files = 0, lines = 0, changes = 0 }
     state.per_file            = {}
@@ -221,6 +241,7 @@ local function render_failed(bufnr, state, err)
 end
 
 M.ns_hl = _ns_hl
+M.set_marker = set_marker
 M.clear_all = clear_all
 M.render = render
 M.set_status = set_status

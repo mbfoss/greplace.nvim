@@ -443,6 +443,16 @@ describe("panel editing", function()
         assert.is_true(child:lua("return (pcall(require('greplace.panel').show, (...), 10))", buf))
     end)
 
+    it("drops a stale status message when the list is drawn again", function()
+        child:open({ "one", "two" })
+        child:lua("require('greplace.panel').state(vim.api.nvim_get_current_buf()).message = 'render failed: x'")
+        child:feed(":edit!<CR>")
+        assert.same({ "one", "two" }, child:lines())
+        assert.is_true(child:lua(
+            "return require('greplace.panel').state(vim.api.nvim_get_current_buf()).message == nil"))
+        assert.is_false(child:lua("return vim.wo.winbar:find('render failed', 1, true) ~= nil"))
+    end)
+
     it("takes a new list in a reloaded panel", function()
         local buf = child:open({ "one", "two" })
         child:feed(":edit!<CR>")

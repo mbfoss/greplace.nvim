@@ -341,8 +341,7 @@ warning, since `setup()` would otherwise accept a misspelling in silence.
   GreplaceLocation          @namespace              file:line of a match
 
   GreplaceBufferIndicator   Special                 the ≡ in front of a
-                                                    match found in a
-                                                    buffer
+                                                    match found in a buffer
 
   GreplaceSeparator         NonText                 the │ between location
                                                     and text
