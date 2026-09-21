@@ -165,7 +165,9 @@ in), on disk and in buffers alike.
 
 Files open in a buffer with unsaved changes are searched from that text, so the
 matches are the ones a write would land on. A location is marked with `≡`
-whenever its file is open in a buffer, saved or not.
+when its match was found in a buffer rather than read from disk, saved or not.
+The mark records where the line came from when the search ran, so it does not
+change as files are opened or closed afterwards.
 
 ### `:Greplace qf`: quickfix import <!-- tag: qf -->
 
@@ -260,7 +262,7 @@ warning, since `setup()` would otherwise accept a misspelling in silence.
 | Group | Default | Meaning |
 | --- | --- | --- |
 | `GreplaceLocation` | `@namespace` | `file:line` of a match |
-| `GreplaceBufferIndicator` | `Special` | the `≡` in front of a match from an open buffer |
+| `GreplaceBufferIndicator` | `Special` | the `≡` in front of a match found in a buffer |
 | `GreplaceSeparator` | `NonText` | the `│` between location and text |
 | `GreplaceStatus` | `Comment` | the winbar's counts and the panel's status text |
 | `GreplaceMatch` | `Label` | the matched text itself |
