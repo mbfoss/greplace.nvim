@@ -237,6 +237,7 @@ require("greplace").setup({
                       -- hits it says so in the winbar
   winbar     = true,  -- show the panel's counts in a winbar
   path_width = 60,    -- greatest width of the `file:line` column, in cells
+  spell      = false, -- spell check the panel's buffer
   keys = {
     open  = "<CR>", -- open the source of the line under the cursor
     hover = "K",    -- show the full details of the match under the cursor

@@ -1381,6 +1381,7 @@ local function show(bufnr, height)
     vim.api.nvim_win_set_buf(0, bufnr)
     vim.wo[0][0].wrap       = false
     vim.wo[0][0].signcolumn = "no"
+    vim.wo[0][0].spell      = config.spell
     -- The panel keeps its window: <CR> (and anything else that opens a file)
     -- must land in a regular window rather than covering the results.
     vim.wo[0][0].winfixbuf  = true

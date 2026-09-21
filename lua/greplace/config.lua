@@ -27,6 +27,7 @@ local M = {}
 ---                           the left, so the file name and line number -- the
 ---                           telling end of it -- stay visible. The full path is
 ---                           always available through the `hover` mapping.
+---@field spell boolean  enable spell checking in the panel window
 ---@field keys   greplace.Keys
 
 ---@type greplace.Config
@@ -35,6 +36,7 @@ local _defaults = {
     limit  = 10000,
     winbar = true,
     path_width = 60,
+    spell  = false,
     keys   = {
         open  = "<CR>",
         hover = "K",
