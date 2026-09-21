@@ -806,9 +806,9 @@ local function set_winbar(bufnr, status)
     -- A final message outlives the buffer write that showed it, so that any
     -- redraw of the winbar puts it back rather than the counts of an empty
     -- panel.
+    local st   = _state[bufnr].stats
     local text = status or _state[bufnr].message
     if not text then
-        local st = M.stats(bufnr)
         text = st and string.format("%s  %s  %s",
             plural(st.files, "file"), plural(st.lines, "line"),
             plural(st.changes, "change")) or ""
@@ -820,7 +820,6 @@ local function set_winbar(bufnr, status)
     -- are removed from it, the counts no longer sit at the limit, and the note
     -- would only be noise; an undo that brings them back brings it back too.
     local limit = ""
-    local st    = M.stats(bufnr)
     if _state[bufnr].truncated and (not st or st.lines >= config.limit) then
         limit = string.format("  %%#GreplaceLimit#limit of %d reached",
             config.limit)
@@ -836,7 +835,9 @@ local function set_winbar(bufnr, status)
     -- past it.
     local bar = string.format(" %%#GreplaceStatus#%s%s%%=", text, limit)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_get_buf(win) == bufnr then
+        -- Only when it differs: setting an option redraws the bar, and this
+        -- runs behind every edit.
+        if vim.api.nvim_win_get_buf(win) == bufnr and vim.wo[win].winbar ~= bar then
             vim.wo[win].winbar = bar
         end
     end
@@ -1263,6 +1264,7 @@ local function create_buf(on_write, on_delete)
                     -- so a replay needs no line touched -- only the marks put
                     -- back onto the lines they were dragged off.
                     local seq, seq_last = undo_seq(bufnr)
+                    local repaired      = false
                     if st.stats and seq_last == st.seq_last and seq ~= st.seq then
                         repairs = 0
                         restore_marks(bufnr, st, lo, hi)
@@ -1272,11 +1274,15 @@ local function create_buf(on_write, on_delete)
                         -- for the next, and the panel stops rather than rewriting
                         -- the buffer under the user's hands forever.
                     elseif repairs < 8 and guard_lines(bufnr, lo, hi) then
-                        repairs = repairs + 1
+                        repairs  = repairs + 1
+                        repaired = true
                     else
                         repairs = 0
                     end
-                    st.seq, st.seq_last = undo_seq(bufnr)
+                    -- Only a repair rewrites text, so only then can the undo
+                    -- state have moved since it was read above.
+                    if repaired then seq, seq_last = undo_seq(bufnr) end
+                    st.seq, st.seq_last = seq, seq_last
                     redraw(bufnr, lo, hi)
                     if st.stats then set_winbar(bufnr) end
                 end)
@@ -1357,7 +1363,7 @@ end
 local function location_width(matches)
     local width = 0
     for _, m in ipairs(matches) do
-        width = math.max(width, vim.fn.strdisplaywidth(m.relpath .. ":" .. m.lnum))
+        width = math.max(width, vim.api.nvim_strwidth(m.relpath .. ":" .. m.lnum))
     end
     return math.min(width, math.max(config.path_width or width, 2))
 end
@@ -1429,7 +1435,7 @@ local function render(bufnr, matches)
         local location = strutil.crop_for_ui(
             string.format("%s:%d", m.relpath, m.lnum), width, true)
         local pad      = string.rep(" ",
-            math.max(0, width - vim.fn.strdisplaywidth(location)))
+            math.max(0, width - vim.api.nvim_strwidth(location)))
         local virt     = {
             { location, "GreplaceLocation" },
             { pad .. " ", "GreplaceSeparator" },
