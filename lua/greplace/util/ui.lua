@@ -101,7 +101,7 @@ function M.smart_open_file(filepath, line, col, activate)
     if line and line < 1 then line = nil end
     if col and col < 0 then col = nil end
     if not filepath or filepath == "" then return -1, -1 end
-    local full_path = vim.fn.fnamemodify(filepath, ':p')
+    local full_path = vim.fn.resolve(filepath)
 
     -- Don't conjure an empty buffer for a path with neither a live buffer nor a
     -- file on disk. (bufadd() would happily create a phantom entry for a
@@ -143,12 +143,6 @@ function M.smart_open_file(filepath, line, col, activate)
     -- the (unloaded) entry; `:buffer` below does the reading.
     local bufnr = vim.fn.bufadd(full_path)
 
-    -- `:buffer <nr>` rather than nvim_win_set_buf(): it takes the buffer by
-    -- number (no name matching), but unlike the API call it sets the alternate
-    -- file and the jump mark, so <C-^> and <C-o> still work after a jump. Run it
-    -- in the resolved regular window, not the current one, which may be a
-    -- winfixbuf panel when activate == false.
-    --
     -- pcall is required here: the load can abort for reasons the caller cannot
     -- check for up front -- an existing swap file the user answers "quit" to, an
     -- unreadable file, E37 on a modified buffer under 'nohidden' -- and an
@@ -165,6 +159,7 @@ function M.smart_open_file(filepath, line, col, activate)
     end
     vim.bo[bufnr].buflisted = true
 
+    vim.api.nvim_win_set_buf(winid, bufnr)
     _safe_set_cursor_pos(winid, line, col)
     return winid, bufnr
 end
