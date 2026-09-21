@@ -439,6 +439,7 @@ local function new_watcher(bufnr)
     function w.reset()
         pending = nil
         ticks   = 0
+        repairs = 0
         seen_seq, seen_last = undo_seq(bufnr)
     end
 
@@ -845,11 +846,21 @@ function M.settle(bufnr, regions)
     local state = state_of(bufnr)
     if not state or not state.tracker then return end
     -- A table of its own rather than the entries edited in place: what
-    -- `state.list` was is not touched.
+    -- `state.list` was is not touched. The region's entry is copied in, since
+    -- the caller still holds `regions` (and `apply.run`'s result holds the
+    -- same entries), and the list must not change with either.
     local entries = {}
     for id, entry in pairs(state.list.entries) do entries[id] = entry end
     for _, region in ipairs(regions) do
-        if entries[region.id] then entries[region.id] = region.entry end
+        local e = region.entry
+        if entries[region.id] then
+            entries[region.id] = {
+                path    = e.path,
+                relpath = e.relpath,
+                lnum    = e.lnum,
+                text    = e.text,
+            }
+        end
     end
     state.list = { entries = entries, order = state.list.order, index = state.list.index }
     -- The highlighted query hits belong to the text as searched, not to what
