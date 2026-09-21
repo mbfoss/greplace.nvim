@@ -76,7 +76,9 @@ local set_status         = draw.set_status
 ---                        still have a line, for `stats.files`
 
 ---@class greplace.Region
----@field entry greplace.Entry
+---@field id    integer   the anchor extmark id of the match
+---@field entry greplace.Entry  a copy: `apply.run` restates it, and the panel
+---                        only takes that back through `M.settle`
 ---@field lines string[]  replacement text: 0 lines leaves the source alone
 
 ---@return integer? bufnr
@@ -569,7 +571,9 @@ local function new_state(opts)
     return {
         query     = opts.query,
         root      = opts.root,
-        flags     = opts.flags,
+        -- Copied: the caller keeps its own table, and the state must not
+        -- change with it (nor it with the state, on a re-run).
+        flags     = opts.flags and vim.deepcopy(opts.flags),
         -- Where the list came from, so a re-run knows what to run again: a
         -- search ("search", the default) or the quickfix list ("quickfix").
         source    = opts.source or "search",
@@ -678,10 +682,17 @@ end
 --- Redraw the markers and counts after a write, leaving the text and undo
 --- history alone: `u` then walks back to the pre-write text, which differs from
 --- the entries `apply.run` restated, so writing again reverts the source.
----@param bufnr integer
-function M.settle(bufnr)
+---@param bufnr   integer
+---@param regions greplace.Region[]  as `M.regions` gave them, after `apply.run`
+---                                  restated their entries
+function M.settle(bufnr, regions)
     local state = _state[bufnr]
     if not state or not state.stats then return end
+    for _, region in ipairs(regions) do
+        if state.entries[region.id] then
+            state.entries[region.id] = region.entry
+        end
+    end
     -- The highlighted query hits belong to the text as searched, not to what
     -- has been written over it since.
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
@@ -728,7 +739,16 @@ function M.regions(bufnr)
     for _, id in ipairs(state.order) do
         local entry = state.entries[id]
         if entry then
-            out[#out + 1] = { entry = entry, lines = lines[id] or {} }
+            out[#out + 1] = {
+                id    = id,
+                entry = {
+                    path    = entry.path,
+                    relpath = entry.relpath,
+                    lnum    = entry.lnum,
+                    text    = entry.text,
+                },
+                lines = lines[id] or {},
+            }
         end
     end
     return out

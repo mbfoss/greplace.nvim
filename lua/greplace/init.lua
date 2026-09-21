@@ -84,7 +84,8 @@ local function apply_edits(bufnr)
     end
 
     local apply  = require("greplace.apply")
-    local result = apply.run(panel.regions(bufnr))
+    local regions = panel.regions(bufnr)
+    local result  = apply.run(regions)
 
     -- A preview shows the edits as they were before this; it is out of date
     -- now. Only looked up if one was ever opened.
@@ -93,7 +94,7 @@ local function apply_edits(bufnr)
 
     -- Redrawn in place rather than rebuilt, so that `u` still walks back over
     -- the write and writing again reverts it.
-    panel.settle(bufnr)
+    panel.settle(bufnr, regions)
 
     local msg
     if result.replaced > 0 then
