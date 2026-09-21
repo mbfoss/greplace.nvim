@@ -93,6 +93,7 @@ local _no_marker        = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker
 ---query it was built from.
 ---@class greplace.PanelState
 ---@field query   string
+---@field source  string   where the list came from: "search" or "quickfix"
 ---@field root    string
 ---@field flags   table?   `:Gsearch` flags the search was run with, so
 ---                        that re-running it means the same search
@@ -652,13 +653,6 @@ local function repair(bufnr, lo, hi, about)
     for i = 1, #anchors - 1 do
         if anchors[i + 1].row ~= anchors[i].row + 1 then broken = true end
     end
-    if vim.env.GREP_DEBUG then
-        _G.dbg = _G.dbg or {}
-        table.insert(_G.dbg, ("repair lo=%d hi=%d below=%d before=%s broken=%s %s %s"):format(
-            lo, hi, below, tostring(before and before[2]), tostring(broken),
-            vim.inspect(anchors, { newline = " ", indent = "" }),
-            vim.inspect(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), { newline = " ", indent = "" })))
-    end
     if not broken then return false end
     if about then about() end
 
@@ -946,8 +940,11 @@ local function goto_change(bufnr, dir)
     local from         = dir > 0 and { row + 1, 0 } or { row - 1, -1 }
     local to           = dir > 0 and -1 or 0
     local left, target = vim.v.count1, nil
-    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, from, to, {})) do
-        if state.changed[mark[1]] and mark[2] ~= target then
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, from, to,
+        { details = true })) do
+        -- A removed match keeps its changed flag but no row: its anchor is
+        -- stranded on whichever line is next.
+        if state.changed[mark[1]] and not is_hidden(mark) and mark[2] ~= target then
             target = mark[2]
             left   = left - 1
             -- The rest of the walk is what a count asked for; the edits beyond
@@ -1105,10 +1102,11 @@ local function create_buf(on_write, on_delete)
                     entries[#entries + 1] = state.entries[id]
                 end
                 vim.bo[bufnr].modifiable = true
-                if not M.refresh(bufnr, entries) then
-                    watch()
-                    return
-                end
+                -- A failed refresh leaves the panel showing its error (and
+                -- holding no list), which is what is kept.
+                M.refresh(bufnr, entries)
+                watch()
+                return
             end
             _state[bufnr] = nil
             vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
@@ -1248,6 +1246,7 @@ local function create_buf(on_write, on_delete)
                     -- back onto the lines they were dragged off.
                     local seq, seq_last = undo_seq(bufnr)
                     if st.stats and seq_last == st.seq_last and seq ~= st.seq then
+                        repairs = 0
                         restore_marks(bufnr, st, lo, hi)
                         -- A repair is a change of its own, which gets a pass of
                         -- its own -- and that pass finds nothing left to repair.
@@ -1288,6 +1287,9 @@ local function show(bufnr, height)
     -- The panel keeps its window: <CR> (and anything else that opens a file)
     -- must land in a regular window rather than covering the results.
     vim.wo[0][0].winfixbuf  = true
+    -- A new window has no winbar of its own, and none is drawn until the next
+    -- edit otherwise.
+    set_winbar(bufnr)
 end
 
 --- The window showing the panel in the current tabpage, if it has one.
@@ -1504,6 +1506,23 @@ function M.set_message(bufnr, msg, hl)
     set_winbar(bufnr, msg)
 end
 
+--- A render that did not finish leaves the panel holding the error rather than
+--- a list that is missing rows without saying which. What it had recorded of
+--- the list goes too: a reload refills the panel from `state.order`, and would
+--- otherwise bring the partial list back, editable. `set_message` also makes
+--- the buffer unmodifiable, so nothing is written back from it.
+---@param bufnr integer
+---@param err   any
+local function render_failed(bufnr, err)
+    local state = _state[bufnr]
+    if state then
+        state.entries, state.order, state.index = {}, {}, {}
+        state.virt, state.hidden, state.changed = {}, {}, {}
+        state.stats, state.per_file, state.loaded = nil, nil, nil
+    end
+    M.set_message(bufnr, "render failed: " .. tostring(err), "ErrorMsg")
+end
+
 --- Open the panel before there are any results, showing the query and that the
 --- search is running. `M.open` takes the same buffer over when it comes back.
 ---@param opts { query:string, root:string, flags:table?, height:integer, on_write:fun(bufnr:integer), on_delete:fun()? }
@@ -1522,7 +1541,6 @@ function M.open_loading(opts)
         hidden    = {},
         truncated = false,
         changed   = {},
-        changes   = {},
     }
     show(bufnr, opts.height)
     set_winbar(bufnr, "searching ...")
@@ -1556,15 +1574,11 @@ function M.open(matches, opts)
         hidden    = {},
         truncated = opts.truncated or false,
         changed   = {},
-        changes   = {},
     }
     show(bufnr, opts.height)
     local ok, err = pcall(render, bufnr, matches)
     if not ok then
-        -- Leave the panel holding the error rather than a list that is missing
-        -- rows without saying which: `set_status` also makes it unmodifiable,
-        -- so nothing can be written back from a render that did not finish.
-        M.set_message(bufnr, "render failed: " .. tostring(err), "ErrorMsg")
+        render_failed(bufnr, err)
         return bufnr, tostring(err)
     end
     return bufnr
@@ -1594,7 +1608,7 @@ function M.refresh(bufnr, entries)
     end
     local ok, err = pcall(render, bufnr, matches)
     if not ok then
-        M.set_message(bufnr, "render failed: " .. tostring(err), "ErrorMsg")
+        render_failed(bufnr, err)
         return tostring(err)
     end
 end
