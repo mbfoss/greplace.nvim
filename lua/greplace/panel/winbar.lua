@@ -4,15 +4,6 @@ local config = require("greplace.config").current
 
 local M = {}
 
---- What the panel currently holds. A removed line drops out of every count --
---- it is no longer part of the replacement. The counts are kept up to date by
---- `redraw`, which runs shortly after an edit rather than within it.
----@param state greplace.PanelState?
----@return greplace.Stats?  nil when the panel holds no rendered list
-function M.stats(state)
-    return state and state.tracker and state.tracker:snapshot()
-end
-
 ---@param n    integer
 ---@param word string
 ---@return string  "1 file", "2 files"
@@ -21,19 +12,16 @@ local function plural(n, word)
 end
 
 --- Draw the panel's winbar: what the panel currently holds, left-aligned.
---- `status` stands in while there is nothing to count -- the search is still
+--- `text` stands in while there is nothing to count -- the search is still
 --- running, or it produced no list.
----@param bufnr  integer
----@param state  greplace.PanelState?  nil for a buffer holding no panel
----@param status string?
-function M.set_winbar(bufnr, state, status)
-    if not config.winbar or not state then return end
+---@param bufnr     integer
+---@param text      string?  what stands in for the counts: a status, or a
+---                          final message
+---@param st        greplace.Stats?  the counts of a rendered list
+---@param truncated boolean  the list is the first `limit` matches of more
+function M.set_winbar(bufnr, text, st, truncated)
+    if not config.winbar then return end
 
-    -- A final message outlives the buffer write that showed it, so that any
-    -- redraw of the winbar puts it back rather than the counts of an empty
-    -- panel.
-    local st   = state.tracker and state.tracker.stats
-    local text = status or state.message
     if not text then
         text = st and string.format("%s  %s  %s",
             plural(st.files, "file"), plural(st.lines, "line"),
@@ -46,7 +34,7 @@ function M.set_winbar(bufnr, state, status)
     -- are removed from it, the counts no longer sit at the limit, and the note
     -- would only be noise; an undo that brings them back brings it back too.
     local limit = ""
-    if state.truncated and (not st or st.lines >= config.limit) then
+    if truncated and (not st or st.lines >= config.limit) then
         limit = string.format("  %%#GreplaceLimit#limit of %d reached",
             config.limit)
     end

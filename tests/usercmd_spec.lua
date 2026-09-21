@@ -27,7 +27,7 @@ local function run(cmd)
     vim.wait(5000, function()
         local bufnr = panel.find_buf()
         local state = bufnr and panel.state(bufnr)
-        return state ~= nil and next(state.entries) ~= nil
+        return state ~= nil and next(state.list.entries) ~= nil
     end, 20)
     return panel.find_buf()
 end
@@ -555,7 +555,7 @@ describe(":Gsearch / :Greplace", function()
         local bufnr = assert(run("'<,'>Gsearch --glob *.md --"))
         local state = assert(panel.state(bufnr))
         assert.are.same({ "b.md" }, vim.tbl_map(function(e) return e.relpath end,
-            vim.tbl_values(state.entries)))
+            vim.tbl_values(state.list.entries)))
     end)
 
     it("refuses a range over several lines, or a query beside the selection", function()

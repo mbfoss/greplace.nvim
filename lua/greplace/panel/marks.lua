@@ -48,8 +48,8 @@
 --
 -- Showing that a line has been edited is not this module's business: `redraw`
 -- says when a line starts or stops differing from its rendered text, and
--- `greplace.panel` records it and has the marker drawn. The panel's state is
--- only read here.
+-- `greplace.panel` records it and has the marker drawn. None of the panel's
+-- state is written here, and each function is handed only the part it reads.
 -- ---------------------------------------------------------------------------
 
 local _ns              = vim.api.nvim_create_namespace("greplace.anchor")
@@ -68,15 +68,14 @@ local _ns_bounds       = vim.api.nvim_create_namespace("greplace.bounds")
 --- text (`cc`, `C`, `:s`) leaves the newline, and so the span, in place.
 
 ---@param bufnr integer
----@param state greplace.PanelState
 ---@param id    integer?  anchor extmark id, or nil for a new anchor
 ---@param row   integer   0-indexed
----@param virt  table[]?  the chunks to draw, for an anchor that has no id yet
+---@param virt  table[]   the chunks to draw
 ---@return integer id
-local function set_anchor(bufnr, state, id, row, virt)
+local function set_anchor(bufnr, id, row, virt)
     return vim.api.nvim_buf_set_extmark(bufnr, _ns, row, 0, {
         id                = id,
-        virt_text         = virt or state.tracker.drawn[id],
+        virt_text         = virt,
         virt_text_pos     = "inline",
         -- Plain gravity: the location is drawn in front of the line, and
         -- text typed at the start of one belongs after it rather than before.
@@ -159,18 +158,17 @@ end
 ---
 --- An extmark is only re-set when what it draws changes: this runs on every
 --- edit, and re-setting even a handful of anchors per keystroke is not free.
----@param bufnr integer
----@param state greplace.PanelState
----@param lo    integer  0-indexed
----@param hi    integer  0-indexed, inclusive
+---@param bufnr   integer
+---@param entries table<integer, greplace.Entry>
+---@param tracker greplace.Tracker
+---@param lo      integer  0-indexed
+---@param hi      integer  0-indexed, inclusive
 ---@return { id:integer, row:integer?, hidden:boolean?, changed:boolean? }[] moves
 ---        `hidden`: anchor `id` lost its line, or got it back; `changed`: the
 ---        line of anchor `id`, now on row `row`, differs from its rendered text
 ---        or is back to it
-local function redraw(bufnr, state, lo, hi)
-    local moves   = {}
-    local tracker = state.tracker
-    if not tracker then return moves end
+local function redraw(bufnr, entries, tracker, lo, hi)
+    local moves = {}
 
     local total = vim.api.nvim_buf_line_count(bufnr)
     local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { lo, 0 }, { hi, -1 },
@@ -179,13 +177,13 @@ local function redraw(bufnr, state, lo, hi)
     for _, mark in ipairs(marks) do
         local id, row = mark[1], mark[2]
         local hide    = is_hidden(mark)
-        if state.entries[id] then
+        if entries[id] then
             if tracker:is_hidden(id) ~= hide then
                 moves[#moves + 1] = { id = id, hidden = hide }
             end
             if not hide and row < total then
                 local text    = lines[row - lo + 1]
-                local changed = text ~= state.entries[id].text
+                local changed = text ~= entries[id].text
                 if changed ~= tracker:is_changed(id) then
                     moves[#moves + 1] = { id = id, row = row, changed = changed }
                 end
@@ -270,17 +268,17 @@ end
 --- cover an anchor's span in full -- invalidating it, which reads as the
 --- match's line having been deleted, and the undo tree records that.
 ---@param bufnr integer
----@param state greplace.PanelState
+---@param drawn table<integer, table[]>  each anchor's chunks
 ---@param row   integer   0-indexed, > 0
 ---@param id    integer?  anchor standing on row `row - 1`, if any
-local function join_row(bufnr, state, row, id)
+local function join_row(bufnr, drawn, row, id)
     local above = line_len(bufnr, row - 1)
     if above == 0 and id then
         -- The line above is empty, so its anchor's span is the one newline
         -- about to go and deleting it would invalidate the mark. The anchor
         -- moves down to the row being joined up first -- the same line once
         -- the empty one is gone -- and the delete then falls outside it.
-        set_anchor(bufnr, state, id, row)
+        set_anchor(bufnr, id, row, drawn[id])
         vim.api.nvim_buf_set_text(bufnr, row - 1, 0, row, 0, {})
     else
         vim.api.nvim_buf_set_text(bufnr, row - 1, above, row, 0, {})
@@ -316,15 +314,15 @@ end
 --- removed. It is the one state where a row belongs to no match and nothing
 --- is wrong, so nothing may be handed that row.
 ---@param bufnr integer
----@param state greplace.PanelState
+---@param order integer[]  anchor ids in listing order
 ---@param standing table<integer, boolean>  which anchors still have a line
 ---@return boolean
-local function is_emptied(bufnr, state, standing)
+local function is_emptied(bufnr, order, standing)
     if vim.api.nvim_buf_line_count(bufnr) ~= 1
         or vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1] ~= "" then
         return false
     end
-    for _, id in ipairs(state.order) do
+    for _, id in ipairs(order) do
         if standing[id] then return false end
     end
     return true
@@ -353,19 +351,20 @@ end
 --- the matches left come out even on a match already in its place: an anchor
 --- further up was not touched, and everything below an even count is settled.
 ---@param bufnr integer
----@param state greplace.PanelState
+---@param list  greplace.List
+---@param drawn table<integer, table[]>  each anchor's chunks
 ---@param lo    integer  0-indexed first row the replay touched
 ---@param hi    integer  0-indexed last row, inclusive
-local function restore_marks(bufnr, state, lo, hi)
+local function restore_marks(bufnr, list, drawn, lo, hi)
     local total = vim.api.nvim_buf_line_count(bufnr)
-    local order = state.order
+    local order = list.order
 
     local standing = {}
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, 0, -1,
         { details = true })) do
         standing[mark[1]] = not is_hidden(mark)
     end
-    if is_emptied(bufnr, state, standing) then return end
+    if is_emptied(bufnr, order, standing) then return end
 
     -- How many matches at or after each position still have a line, so that
     -- the rows left over at any point of the walk can be counted.
@@ -376,7 +375,7 @@ local function restore_marks(bufnr, state, lo, hi)
     end
 
     local above = lo > 0 and standing_before(bufnr, lo - 1, -1) or nil
-    local from  = above and (state.index[above[1]] + 1) or 1
+    local from  = above and (list.index[above[1]] + 1) or 1
     local row   = above and (above[2] + 1) or 0
 
     for i = from, #order do
@@ -396,7 +395,7 @@ local function restore_marks(bufnr, state, lo, hi)
                 break
             end
             if at[1] ~= row or at[2] ~= 0 or revived then
-                set_anchor(bufnr, state, id, row)
+                set_anchor(bufnr, id, row, drawn[id])
             end
             set_bounds(bufnr, id, row, line_len(bufnr, row))
             row = row + 1
@@ -411,7 +410,7 @@ end
 --- once lines have been joined, where the row they share says nothing about
 --- which of them comes first.
 ---@param bufnr integer
----@param state greplace.PanelState
+---@param index table<integer, integer>  each anchor's position in the listing
 ---@param lo    integer  0-indexed first row the change touched
 ---@param hi    integer  0-indexed last row, inclusive
 ---@return table? before  the anchor of the match the window starts at, if the
@@ -420,7 +419,7 @@ end
 ---                       or the row count where there is none
 ---@return table[] anchors  `{ id, row, col, srow, scol, erow, ecol }`: where
 ---                       the anchor sits, and where its match's text does
-local function gather(bufnr, state, lo, hi)
+local function gather(bufnr, index, lo, hi)
     -- The window starts at the match whose line the change began in -- which
     -- may start above `lo`, the change having broken its line -- and the first
     -- match below the window bounds the rows the last one in it may hold.
@@ -443,7 +442,7 @@ local function gather(bufnr, state, lo, hi)
         end
     end
     table.sort(anchors, function(x, y)
-        return (state.index[x.id] or 0) < (state.index[y.id] or 0)
+        return (index[x.id] or 0) < (index[y.id] or 0)
     end)
     return before, after and after[2] or vim.api.nvim_buf_line_count(bufnr), anchors
 end
@@ -453,13 +452,13 @@ end
 --- and left behind by the line it is on being split -- neither of which moves
 --- the text it belongs to -- so it is the bounds that say where it goes.
 ---@param bufnr   integer
----@param state   greplace.PanelState
+---@param drawn   table<integer, table[]>  each anchor's chunks
 ---@param anchors table[]  as `gather`
-local function realign(bufnr, state, anchors)
+local function realign(bufnr, drawn, anchors)
     for _, a in ipairs(anchors) do
         local srow = select(1, get_bounds(bufnr, a.id))
         if a.row ~= srow or a.col ~= 0 then
-            set_anchor(bufnr, state, a.id, srow)
+            set_anchor(bufnr, a.id, srow, drawn[a.id])
         end
     end
 end
@@ -491,7 +490,8 @@ end
 --- business of this: removing a line from the panel is how a match is left out
 --- of the replacement.
 ---@param bufnr integer
----@param state greplace.PanelState
+---@param list  greplace.List
+---@param drawn table<integer, table[]>  each anchor's chunks
 ---@param lo    integer  0-indexed first row the change touched
 ---@param hi    integer  0-indexed last row, inclusive
 ---@param about fun()?  called once the marks say there is something to put
@@ -500,13 +500,12 @@ end
 ---                     of its own is not for the changes that need none
 ---@return boolean repaired
 ---@return boolean? edited  and whether any line had to be rewritten for it
-local function repair(bufnr, state, lo, hi, about)
-    if not state.tracker then return false end
+local function repair(bufnr, list, drawn, lo, hi, about)
     local total = vim.api.nvim_buf_line_count(bufnr)
     lo = math.max(0, math.min(lo, total - 1))
     hi = math.max(lo, math.min(hi, total - 1))
 
-    local before, below, anchors = gather(bufnr, state, lo, hi)
+    local before, below, anchors = gather(bufnr, list.index, lo, hi)
     -- No match here at all: either the panel was emptied outright (Neovim
     -- keeps one blank line whatever is deleted, and handing it to a match
     -- would bring one back), or the change was made where no match is left.
@@ -534,8 +533,8 @@ local function repair(bufnr, state, lo, hi, about)
     -- From here the bounds are the record, so the anchors are brought onto
     -- them first: the window is read again around anchors that stand where
     -- their matches' text does.
-    realign(bufnr, state, anchors)
-    before, below, anchors = gather(bufnr, state, lo, hi)
+    realign(bufnr, drawn, anchors)
+    before, below, anchors = gather(bufnr, list.index, lo, hi)
     if #anchors == 0 then return false end
 
     local fixed, edited = false, false
@@ -551,7 +550,7 @@ local function repair(bufnr, state, lo, hi, about)
             -- `J` also strips the indent of the line it pulls up, which is
             -- part of that line's text and not of the seam: put it back, as
             -- long as the line has not been given an indent of its own.
-            local entry = state.entries[next_a.id]
+            local entry = list.entries[next_a.id]
             local indent = entry and entry.text:match("^%s+")
             local moved = vim.api.nvim_buf_get_lines(bufnr, a.row + 1, a.row + 2, false)[1]
             if indent and moved and not moved:match("^%s") then
@@ -561,7 +560,7 @@ local function repair(bufnr, state, lo, hi, about)
         else
             for row = (next_a and next_a.row or below) - 1, a.row + 1, -1 do
                 if row <= a.erow then
-                    join_row(bufnr, state, row, row - 1 == a.row and a.id or nil)
+                    join_row(bufnr, drawn, row, row - 1 == a.row and a.id or nil)
                 else
                     delete_row(bufnr, row)
                 end
@@ -580,7 +579,7 @@ local function repair(bufnr, state, lo, hi, about)
     -- A split leaves the anchor of the match it moved down behind on the row
     -- above, the location being drawn in front of whatever is typed at the
     -- head of a line rather than carried along by it.
-    realign(bufnr, state, anchors)
+    realign(bufnr, drawn, anchors)
     return fixed, edited
 end
 
@@ -602,13 +601,14 @@ end
 --- not hold one line per match -- and so that undo and redo, which replay both
 --- together, always land on a state that needs no repair of its own.
 ---@param bufnr integer
----@param state greplace.PanelState
+---@param list  greplace.List
+---@param drawn table<integer, table[]>  each anchor's chunks
 ---@param lo    integer  0-indexed first row the change touched
 ---@param hi    integer  0-indexed last row, inclusive
 ---@return boolean repaired
-local function guard_lines(bufnr, state, lo, hi)
+local function guard_lines(bufnr, list, drawn, lo, hi)
     local cur, at, offset = nil, nil, 0
-    local fixed, edited = repair(bufnr, state, lo, hi, function()
+    local fixed, edited = repair(bufnr, list, drawn, lo, hi, function()
         -- Where the cursor goes: as far into its match's line as it is now,
         -- the match being the last one still standing that starts at or
         -- before it.

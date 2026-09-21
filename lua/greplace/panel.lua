@@ -13,16 +13,24 @@ local draw               = require("greplace.panel.render")
 
 local _buffer_name       = "greplace://greplace-matches"
 
---- The state of each panel buffer. Owned here: the other modules are handed
---- the state they work on, and never look one up.
----@type table<integer, greplace.PanelState>
-local _state             = {}
+---What is kept of one panel buffer: the state of the list it holds, if it
+---holds one, and the watch on its lines. The state is replaced by each search
+---and dropped by a reload; the watch lasts as long as the buffer.
+---@class greplace.Panel
+---@field state   greplace.PanelState?
+---@field watcher greplace.Watcher
 
---- Per panel buffer: drops the rows its line watch has queued for a pass. A
---- render replaces every line, which queues a pass over the whole list that
---- has nothing to find in what was just laid out.
----@type table<integer, fun()>
-local _drop_pending      = {}
+--- Every panel buffer's record. Owned here: the other modules are handed the
+--- part of the state they work on, and never look one up.
+---@type table<integer, greplace.Panel>
+local _panels            = {}
+
+---@param bufnr integer
+---@return greplace.PanelState?
+local function state_of(bufnr)
+    local panel = _panels[bufnr]
+    return panel and panel.state
+end
 
 local _ns                = marks.ns
 local _ns_hl             = draw.ns_hl
@@ -34,7 +42,6 @@ local standing_before    = marks.standing_before
 local restore_marks      = marks.restore_marks
 local guard_lines        = marks.guard_lines
 local undo_seq           = marks.undo_seq
-local set_winbar         = winbar.set_winbar
 local set_status         = draw.set_status
 
 -- The panel is the only module that writes a `greplace.PanelState`. `render`
@@ -52,28 +59,30 @@ local set_status         = draw.set_status
 ---State of the one panel buffer: the anchor extmark id of each match, and the
 ---query it was built from. Written by this module alone; the others read it.
 ---@class greplace.PanelState
----@field query   string
----@field source  string   where the list came from: "search" or "quickfix"
----@field root    string
----@field flags   table?   `:Gsearch` flags the search was run with, so
----                        that re-running it means the same search
----@field entries table<integer, greplace.Entry>  keyed by anchor extmark id;
----                        replaced by a render or a write, never edited
----@field order   integer[]  anchor extmark ids in listing order
----@field index   table<integer, integer>  each anchor's position in `order`
+---@field origin  greplace.Origin  what the list was made from; fixed
+---@field list    greplace.List  the matches; replaced by a render or a
+---                        write, never edited
 ---@field tracker greplace.Tracker?  which matches lost their line or were
 ---                        edited, the winbar's counts and what each anchor
 ---                        draws; set once a result list is rendered
----@field truncated boolean  the search stopped at the match limit, so this is
----                          the first `limit` matches of more
 ---@field message string?  final status -- "no matches", or the error that
 ---                       ended the search -- kept so a redraw can restore it
----@field ticks   integer?  how many changes the line watch has seen, which is
----                        how a spec tells one watch from two
----@field seq      integer?  the undo state the last pass saw, and
----@field seq_last integer?  the newest one there was: an undo or a redo moves
----                        between states without adding one, and that is the
----                        one change whose text needs nothing done to it
+
+---What a panel was opened on. Fixed for as long as the panel shows that list.
+---@class greplace.Origin
+---@field query     string
+---@field root      string
+---@field flags     table?   `:Gsearch` flags the search was run with, so that
+---                          re-running it means the same search
+---@field source    string   where the list came from: "search" or "quickfix"
+---@field truncated boolean  the search stopped at the match limit, so this is
+---                          the first `limit` matches of more
+
+---The matches of a rendered list, as `render` lays them out.
+---@class greplace.List
+---@field entries table<integer, greplace.Entry>  keyed by anchor extmark id
+---@field order   integer[]  anchor extmark ids in listing order
+---@field index   table<integer, integer>  each anchor's position in `order`
 
 ---@class greplace.Region
 ---@field id    integer   the anchor extmark id of the match
@@ -94,15 +103,52 @@ function M.find_buf()
     end
 end
 
+--- The live state, for the specs to look into. Nothing else asks for it:
+--- `M.origin` and `M.has_list` answer what the rest of the plugin needs.
 ---@param bufnr integer
 ---@return greplace.PanelState?
 function M.state(bufnr)
-    return _state[bufnr]
+    return state_of(bufnr)
 end
 
 ---@param bufnr integer
 function M.is_panel(bufnr)
-    return _state[bufnr] ~= nil
+    return state_of(bufnr) ~= nil
+end
+
+--- Whether the panel holds a list that can be applied: not a search still
+--- running, nor one that ended in a message.
+---@param bufnr integer
+---@return boolean
+function M.has_list(bufnr)
+    local state = state_of(bufnr)
+    return state ~= nil and state.tracker ~= nil and state.message == nil
+end
+
+--- What the panel was opened on, as a table of the caller's own, so that a
+--- search can be run again.
+---@param bufnr integer
+---@return greplace.Origin?
+function M.origin(bufnr)
+    local state = state_of(bufnr)
+    if not state then return end
+    local o = state.origin
+    return {
+        query     = o.query,
+        root      = o.root,
+        flags     = o.flags and vim.deepcopy(o.flags),
+        source    = o.source,
+        truncated = o.truncated,
+    }
+end
+
+--- How many changes the panel's line watch has seen; with `clear`, counting
+--- starts again. A spec tells one watch from two by it.
+---@param bufnr  integer
+---@param clear  boolean?
+---@return integer
+function M.ticks(bufnr, clear)
+    return _panels[bufnr].watcher.ticks(clear)
 end
 
 --- The match a buffer row belongs to: the nearest anchor at or above `row`,
@@ -112,11 +158,11 @@ end
 ---@return greplace.Entry? entry
 ---@return integer?        anchor_row  0-indexed row the anchor sits on
 function M.entry_at(bufnr, row)
-    local state = _state[bufnr]
+    local state = state_of(bufnr)
     if not state then return end
     local mark = standing_before(bufnr, row, -1)
     if not mark then return end
-    return state.entries[mark[1]], mark[2]
+    return state.list.entries[mark[1]], mark[2]
 end
 
 --- Open the source of the line under the cursor, in a regular window (never
@@ -180,7 +226,7 @@ end
 ---@param bufnr integer
 ---@param dir   integer  1 forwards, -1 backwards
 local function goto_change(bufnr, dir)
-    local state = _state[bufnr]
+    local state = state_of(bufnr)
     if not state then return end
     if not state.tracker or state.tracker.stats.changes == 0 then
         vim.api.nvim_echo({ { "greplace: nothing has been edited" } }, false, {})
@@ -241,6 +287,17 @@ local function goto_change(bufnr, dir)
     vim.api.nvim_win_set_cursor(0, { target + 1, 0 })
 end
 
+--- Draw the winbar for a panel: `status` if there is one, else the final
+--- message it holds, else the counts.
+---@param bufnr   integer
+---@param state   greplace.PanelState?  nil for a buffer holding no panel
+---@param status  string?
+local function set_winbar(bufnr, state, status)
+    if not state then return end
+    winbar.set_winbar(bufnr, status or state.message,
+        state.tracker and state.tracker.stats, state.origin.truncated)
+end
+
 --- Read rows `lo`..`hi` against the list, and take what differs into the
 --- tracker: a match that lost its line or got it back, a line that started or
 --- stopped differing from its rendered text -- which is also drawn.
@@ -250,16 +307,166 @@ end
 ---@param hi    integer  0-indexed, inclusive
 local function redraw_marks(bufnr, state, lo, hi)
     local tracker = state.tracker
-    for _, move in ipairs(redraw(bufnr, state, lo, hi)) do
+    if not tracker then return end
+    for _, move in ipairs(redraw(bufnr, state.list.entries, tracker, lo, hi)) do
         if move.hidden ~= nil then
             tracker:set_hidden(move.id, move.hidden)
         end
         if move.changed ~= nil then
             tracker:set_changed(move.id, move.changed)
             tracker:set_drawn(move.id, draw.with_marker(tracker.drawn[move.id], move.changed))
-            set_anchor(bufnr, state, move.id, move.row)
+            set_anchor(bufnr, move.id, move.row, tracker.drawn[move.id])
         end
     end
+end
+
+---@class greplace.Watcher
+---@field attach fun()  start watching the lines, unless already doing so
+---@field reset  fun()  a list was just laid out: forget what was queued
+---                     against the lines it replaced, and take the undo state
+---                     as the one to compare against
+---@field ticks  fun(clear:boolean?):integer  how many changes the watch has
+---                     seen (and, with `clear`, start counting again), which is
+---                     how a spec tells one watch from two
+
+--- The line watch of a panel buffer, and what it keeps between one change and
+--- the next: the rows queued for a pass, the undo state the last pass saw, and
+--- how many passes in a row had something to put back. Nothing of it is on
+--- the panel's state.
+---@param bufnr integer
+---@return greplace.Watcher
+local function new_watcher(bufnr)
+    -- `on_lines` rather than `TextChanged`: it catches every kind of change,
+    -- including one made from a mapping or a script mid-command, and it fires
+    -- as the change lands rather than on the way back to the main loop.
+    -- Its callback runs in a context where the API is off limits, hence the
+    -- `vim.schedule`; one pending pass is enough however many lines changed.
+    -- The rows that pass has to look at, `{ first, last }` (inclusive), in the
+    -- buffer's current numbering: every row a change since the last pass
+    -- touched, and the row below, where the anchors of deleted lines land.
+    ---@type integer[]?
+    local pending  = nil
+    local attached = false
+    -- How many passes in a row have had something to put back.
+    local repairs  = 0
+    local ticks    = 0
+    -- The undo state the last pass saw, and the newest one there was: an undo
+    -- or a redo moves between states without adding one, and that is the one
+    -- change whose text needs nothing done to it.
+    local seen_seq, seen_last
+
+    local w = {}
+
+    -- Watching the lines is not a one-off. `:edit` unloads the buffer before
+    -- `BufReadCmd` fills it again, and an unload detaches every listener on
+    -- it -- `on_detach`, not `on_reload`, a buffer read by `BufReadCmd` being
+    -- one Neovim does not offer a reload. The buffer itself survives, and the
+    -- next search reuses it rather than going back through `create_buf`, so
+    -- the reload has to attach again or the panel comes back unwatched: no
+    -- guard and no redraw behind an edit. Attaching twice would be no better
+    -- than not at all -- every change acted on twice over -- hence the flag
+    -- rather than a second attach on trust.
+    function w.attach()
+        if attached then return end
+        attached = true
+        pending  = nil
+        vim.api.nvim_buf_attach(bufnr, false, {
+            on_detach = function() attached = false end,
+            on_lines = function(_, _, _, first, last_old, last_new)
+                -- Nothing to look at: the list was thrown away by a reload,
+                -- and the lines left are no match's.
+                if not state_of(bufnr) then return end
+                ticks = ticks + 1
+
+                if pending then
+                    -- Rows below the change move with it; a row inside the lines
+                    -- it replaced is now somewhere among the new ones.
+                    local last = pending[2]
+                    if last >= last_old then
+                        last = last + last_new - last_old
+                    elseif last > first then
+                        last = last_new
+                    end
+                    pending[1] = math.min(pending[1], first)
+                    pending[2] = math.max(last, last_new)
+                    return
+                end
+                pending = { first, last_new }
+                vim.schedule(function()
+                    -- A reload between the change and this pass takes the
+                    -- rows to look at with it (`attach`), and leaves no list
+                    -- to look at them against either.
+                    if not pending then return end
+                    local lo, hi = pending[1], pending[2]
+                    pending = nil
+                    local st = state_of(bufnr)
+                    if not st or not vim.api.nvim_buf_is_valid(bufnr) then return end
+                    -- An undo or a redo moves to another undo state without
+                    -- adding one; a new change always adds one. Every state
+                    -- the undo tree holds was put in shape when it was made,
+                    -- so a replay needs no line touched -- only the marks put
+                    -- back onto the lines they were dragged off.
+                    local seq, seq_last = undo_seq(bufnr)
+                    local repaired      = false
+                    if st.tracker and seq_last == seen_last and seq ~= seen_seq then
+                        repairs = 0
+                        restore_marks(bufnr, st.list, st.tracker.drawn, lo, hi)
+                        -- A repair is a change of its own, which gets a pass of
+                        -- its own -- and that pass finds nothing left to repair.
+                        -- More than a handful in a row means one is making work
+                        -- for the next, and the panel stops rather than rewriting
+                        -- the buffer under the user's hands forever.
+                    elseif repairs < 8 and st.tracker
+                        and guard_lines(bufnr, st.list, st.tracker.drawn, lo, hi) then
+                        repairs  = repairs + 1
+                        repaired = true
+                    else
+                        repairs = 0
+                    end
+                    -- Only a repair rewrites text, so only then can the undo
+                    -- state have moved since it was read above.
+                    if repaired then seq, seq_last = undo_seq(bufnr) end
+                    seen_seq, seen_last = seq, seq_last
+                    redraw_marks(bufnr, st, lo, hi)
+                    if st.tracker then set_winbar(bufnr, st) end
+                end)
+            end,
+        })
+    end
+
+    -- A render replaces every line, which queues a pass over the whole list
+    -- that has nothing to find in what was just laid out.
+    function w.reset()
+        pending = nil
+        ticks   = 0
+        seen_seq, seen_last = undo_seq(bufnr)
+    end
+
+    function w.ticks(clear)
+        local n = ticks
+        if clear then ticks = 0 end
+        return n
+    end
+
+    return w
+end
+
+--- Start keeping the record of a panel buffer.
+---@param bufnr integer
+---@return greplace.Panel
+local function register(bufnr)
+    local panel = { watcher = new_watcher(bufnr) }
+    _panels[bufnr] = panel
+    panel.watcher.attach()
+    return panel
+end
+
+---@param bufnr integer
+---@return greplace.Panel
+local function panel_of(bufnr)
+    -- No record for a buffer that still carries the panel's name is a husk
+    -- that outlived its own wipe-out: it gets the watch it would have had.
+    return _panels[bufnr] or register(bufnr)
 end
 
 ---@param on_write  fun(bufnr:integer)  `:w` in the panel
@@ -271,10 +478,6 @@ local function create_buf(on_write, on_delete)
     -- panel to draw.
     M.setup_highlights()
 
-    -- Defined with the line watch below, and called from the reload, which
-    -- detaches it.
-    ---@type fun()
-    local watch
     ---@type integer
     local group
 
@@ -289,8 +492,7 @@ local function create_buf(on_write, on_delete)
     }, function()
         -- The list ends with the buffer: nothing is left to apply, and the
         -- search filling it has nowhere to land.
-        _state[bufnr] = nil
-        _drop_pending[bufnr] = nil
+        _panels[bufnr] = nil
         pcall(vim.api.nvim_del_augroup_by_id, group)
         if on_delete then on_delete() end
     end)
@@ -342,7 +544,7 @@ local function create_buf(on_write, on_delete)
             -- Nothing to apply once the buffer no longer holds a list -- it
             -- was reloaded out from under the panel (see `BufReadCmd`), and
             -- its lines belong to no match.
-            if not _state[bufnr] then
+            if not state_of(bufnr) then
                 vim.bo[bufnr].modified = false
                 return
             end
@@ -361,20 +563,20 @@ local function create_buf(on_write, on_delete)
         buffer   = bufnr,
         desc     = "greplace: a reload refills the panel from the stored lines",
         callback = function()
-            local state = _state[bufnr]
+            local state = state_of(bufnr)
             if state and state.tracker then
                 local entries = {}
-                for _, id in ipairs(state.order) do
-                    entries[#entries + 1] = state.entries[id]
+                for _, id in ipairs(state.list.order) do
+                    entries[#entries + 1] = state.list.entries[id]
                 end
                 vim.bo[bufnr].modifiable = true
                 -- A failed refresh leaves the panel showing its error (and
                 -- holding no list), which is what is kept.
                 M.refresh(bufnr, entries)
-                watch()
+                _panels[bufnr].watcher.attach()
                 return
             end
-            _state[bufnr] = nil
+            _panels[bufnr].state = nil
             clear_all(bufnr)
             vim.bo[bufnr].modifiable = true
             for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -382,7 +584,7 @@ local function create_buf(on_write, on_delete)
                     vim.wo[win].winbar = ""
                 end
             end
-            watch()
+            _panels[bufnr].watcher.attach()
         end,
     })
     -- Unapplied edits must not turn into an "unsaved changes" prompt on the
@@ -427,97 +629,7 @@ local function create_buf(on_write, on_delete)
         desc   = "greplace: move to the previous edited line",
     })
 
-    -- `on_lines` rather than `TextChanged`: it catches every kind of change,
-    -- including one made from a mapping or a script mid-command, and it fires
-    -- as the change lands rather than on the way back to the main loop.
-    -- Its callback runs in a context where the API is off limits, hence the
-    -- `vim.schedule`; one pending pass is enough however many lines changed.
-    -- The rows that pass has to look at, `{ first, last }` (inclusive), in the
-    -- buffer's current numbering: every row a change since the last pass
-    -- touched, and the row below, where the anchors of deleted lines land.
-    ---@type integer[]?
-    local pending  = nil
-    local attached = false
-    -- How many passes in a row have had something to put back.
-    local repairs  = 0
-    -- Watching the lines is not a one-off. `:edit` unloads the buffer before
-    -- `BufReadCmd` fills it again, and an unload detaches every listener on
-    -- it -- `on_detach`, not `on_reload`, a buffer read by `BufReadCmd` being
-    -- one Neovim does not offer a reload. The buffer itself survives, and the
-    -- next search reuses it rather than going back through `create_buf`, so
-    -- the reload has to attach again or the panel comes back unwatched: no
-    -- guard and no redraw behind an edit. Attaching twice would be no better
-    -- than not at all -- every change acted on twice over -- hence the flag
-    -- rather than a second attach on trust.
-    watch          = function()
-        if attached then return end
-        attached = true
-        pending  = nil
-        vim.api.nvim_buf_attach(bufnr, false, {
-            on_detach = function() attached = false end,
-            on_lines = function(_, _, _, first, last_old, last_new)
-                -- Nothing to look at: the list was thrown away by a reload,
-                -- and the lines left are no match's.
-                local state = _state[bufnr]
-                if not state then return end
-                state.ticks = (state.ticks or 0) + 1
-
-                if pending then
-                    -- Rows below the change move with it; a row inside the lines
-                    -- it replaced is now somewhere among the new ones.
-                    local last = pending[2]
-                    if last >= last_old then
-                        last = last + last_new - last_old
-                    elseif last > first then
-                        last = last_new
-                    end
-                    pending[1] = math.min(pending[1], first)
-                    pending[2] = math.max(last, last_new)
-                    return
-                end
-                pending = { first, last_new }
-                vim.schedule(function()
-                    -- A reload between the change and this pass takes the
-                    -- rows to look at with it (`watch`), and leaves no list
-                    -- to look at them against either.
-                    if not pending then return end
-                    local lo, hi = pending[1], pending[2]
-                    pending = nil
-                    local st = _state[bufnr]
-                    if not st or not vim.api.nvim_buf_is_valid(bufnr) then return end
-                    -- An undo or a redo moves to another undo state without
-                    -- adding one; a new change always adds one. Every state
-                    -- the undo tree holds was put in shape when it was made,
-                    -- so a replay needs no line touched -- only the marks put
-                    -- back onto the lines they were dragged off.
-                    local seq, seq_last = undo_seq(bufnr)
-                    local repaired      = false
-                    if st.tracker and seq_last == st.seq_last and seq ~= st.seq then
-                        repairs = 0
-                        restore_marks(bufnr, st, lo, hi)
-                        -- A repair is a change of its own, which gets a pass of
-                        -- its own -- and that pass finds nothing left to repair.
-                        -- More than a handful in a row means one is making work
-                        -- for the next, and the panel stops rather than rewriting
-                        -- the buffer under the user's hands forever.
-                    elseif repairs < 8 and guard_lines(bufnr, st, lo, hi) then
-                        repairs  = repairs + 1
-                        repaired = true
-                    else
-                        repairs = 0
-                    end
-                    -- Only a repair rewrites text, so only then can the undo
-                    -- state have moved since it was read above.
-                    if repaired then seq, seq_last = undo_seq(bufnr) end
-                    st.seq, st.seq_last = seq, seq_last
-                    redraw_marks(bufnr, st, lo, hi)
-                    if st.tracker then set_winbar(bufnr, st) end
-                end)
-            end,
-        })
-    end
-    _drop_pending[bufnr] = function() pending = nil end
-    watch()
+    register(bufnr)
     return bufnr
 end
 
@@ -540,7 +652,7 @@ local function show(bufnr, height)
     vim.wo[0][0].winfixbuf  = true
     -- A new window has no winbar of its own, and none is drawn until the next
     -- edit otherwise.
-    set_winbar(bufnr, _state[bufnr])
+    set_winbar(bufnr, state_of(bufnr))
 end
 
 --- The window showing the panel in the current tabpage, if it has one.
@@ -585,23 +697,28 @@ end
 -- search is running, and afterwards whatever came of it if it produced no list
 -- to render.
 
+---@return greplace.List
+local function empty_list()
+    return { entries = {}, order = {}, index = {} }
+end
+
 --- The state of a panel that holds no list yet.
 ---@param opts { query:string, root:string, flags:table?, truncated:boolean?, source:string? }
 ---@return greplace.PanelState
 local function new_state(opts)
     return {
-        query     = opts.query,
-        root      = opts.root,
-        -- Copied: the caller keeps its own table, and the state must not
-        -- change with it (nor it with the state, on a re-run).
-        flags     = opts.flags and vim.deepcopy(opts.flags),
-        -- Where the list came from, so a re-run knows what to run again: a
-        -- search ("search", the default) or the quickfix list ("quickfix").
-        source    = opts.source or "search",
-        entries   = {},
-        order     = {},
-        index     = {},
-        truncated = opts.truncated or false,
+        origin = {
+            query     = opts.query,
+            root      = opts.root,
+            -- Copied: the caller keeps its own table, and the state must not
+            -- change with it (nor it with the state, on a re-run).
+            flags     = opts.flags and vim.deepcopy(opts.flags),
+            -- Where the list came from, so a re-run knows what to run again: a
+            -- search ("search", the default) or the quickfix list ("quickfix").
+            source    = opts.source or "search",
+            truncated = opts.truncated or false,
+        },
+        list   = empty_list(),
     }
 end
 
@@ -624,26 +741,22 @@ end
 ---@param matches greplace.Match[]
 ---@return string? err
 local function render_list(bufnr, matches)
-    local state = assert(_state[bufnr])
+    local state = assert(state_of(bufnr))
     local ok, list, tracker = pcall(draw.render, bufnr, matches)
-    -- The pass the write queued has nothing to find in what was just laid out.
-    local drop = _drop_pending[bufnr]
-    if drop then drop() end
+    _panels[bufnr].watcher.reset()
     if not ok then
         -- Nothing of the list is kept: a reload refills the panel from
-        -- `state.order`, and would otherwise bring a partial one back,
+        -- `state.list.order`, and would otherwise bring a partial one back,
         -- editable. `show_message` also makes the buffer unmodifiable, so
         -- nothing is written back from it.
-        state.entries, state.order, state.index, state.tracker = {}, {}, {}, nil
+        state.list, state.tracker = empty_list(), nil
         show_message(bufnr, state, "render failed: " .. tostring(list), "ErrorMsg")
         return tostring(list)
     end
-    state.entries, state.order, state.index = list.entries, list.order, list.index
+    state.list    = list
     state.tracker = tracker
     -- A status from before is not this list's.
     state.message = nil
-    state.ticks   = 0
-    state.seq, state.seq_last = undo_seq(bufnr)
     set_winbar(bufnr, state)
 end
 
@@ -653,9 +766,9 @@ end
 ---@return integer bufnr
 function M.open_loading(opts)
     local bufnr   = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
-    _state[bufnr] = new_state(opts)
+    panel_of(bufnr).state = new_state(opts)
     show(bufnr, opts.height)
-    set_winbar(bufnr, _state[bufnr], "searching ...")
+    set_winbar(bufnr, state_of(bufnr), "searching ...")
     set_status(bufnr, {
         { "searching for ", "GreplaceStatus" },
         { opts.query,       "GreplaceMatch" },
@@ -672,7 +785,7 @@ end
 ---                     holds nothing editable
 function M.open(matches, opts)
     local bufnr = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
-    _state[bufnr] = new_state(opts)
+    panel_of(bufnr).state = new_state(opts)
     show(bufnr, opts.height)
     return bufnr, render_list(bufnr, matches)
 end
@@ -706,7 +819,8 @@ end
 ---@param bufnr integer
 ---@return greplace.Stats?  nil when the buffer is not a rendered panel
 function M.stats(bufnr)
-    return winbar.stats(_state[bufnr])
+    local state = state_of(bufnr)
+    return state and state.tracker and state.tracker:snapshot()
 end
 
 --- Replace the "searching" status with a final message -- "no matches", or
@@ -717,7 +831,7 @@ end
 ---@param msg   string
 ---@param hl    string?
 function M.set_message(bufnr, msg, hl)
-    local state = _state[bufnr]
+    local state = state_of(bufnr)
     if state then show_message(bufnr, state, msg, hl) end
 end
 
@@ -728,16 +842,16 @@ end
 ---@param regions greplace.Region[]  as `M.regions` gave them, after `apply.run`
 ---                                  restated their entries
 function M.settle(bufnr, regions)
-    local state = _state[bufnr]
+    local state = state_of(bufnr)
     if not state or not state.tracker then return end
     -- A table of its own rather than the entries edited in place: what
-    -- `state.entries` was is not touched.
+    -- `state.list` was is not touched.
     local entries = {}
-    for id, entry in pairs(state.entries) do entries[id] = entry end
+    for id, entry in pairs(state.list.entries) do entries[id] = entry end
     for _, region in ipairs(regions) do
         if entries[region.id] then entries[region.id] = region.entry end
     end
-    state.entries = entries
+    state.list = { entries = entries, order = state.list.order, index = state.list.index }
     -- The highlighted query hits belong to the text as searched, not to what
     -- has been written over it since.
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
@@ -753,7 +867,7 @@ end
 ---@param bufnr integer
 ---@return greplace.Region[] regions  in buffer order
 function M.regions(bufnr)
-    local state = _state[bufnr]
+    local state = state_of(bufnr)
     if not state then return {} end
 
     local total       = vim.api.nvim_buf_line_count(bufnr)
@@ -780,8 +894,8 @@ function M.regions(bufnr)
     -- In listing order, which is the order the standing anchors sit in: the
     -- removed matches, whose anchors are stranded wherever their line was
     -- deleted, have no place of their own to be listed in.
-    for _, id in ipairs(state.order) do
-        local entry = state.entries[id]
+    for _, id in ipairs(state.list.order) do
+        local entry = state.list.entries[id]
         if entry then
             out[#out + 1] = {
                 id    = id,

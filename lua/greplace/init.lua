@@ -76,8 +76,7 @@ end
 --- rather than redrawn as an empty list.
 ---@param bufnr integer
 local function apply_edits(bufnr)
-    local state = panel.state(bufnr)
-    if not state or not state.tracker or state.message then
+    if not panel.has_list(bufnr) then
         vim.bo[bufnr].modified = false
         _notify("no list to apply", vim.log.levels.WARN)
         return
@@ -258,8 +257,8 @@ end
 ---@param opts { force: boolean? }?
 function M.refresh(opts)
     local bufnr = panel.find_buf()
-    local state = bufnr and panel.state(bufnr)
-    if not bufnr or not state then
+    local origin = bufnr and panel.origin(bufnr)
+    if not bufnr or not origin then
         _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
         return
     end
@@ -268,10 +267,10 @@ function M.refresh(opts)
             .. "or discard them with :Greplace! refresh", vim.log.levels.WARN)
         return
     end
-    if state.source == "quickfix" then
+    if origin.source == "quickfix" then
         M.open_qf()
     else
-        M.open(state.query, { cwd = state.root, flags = state.flags })
+        M.open(origin.query, { cwd = origin.root, flags = origin.flags })
     end
 end
 
@@ -280,7 +279,7 @@ end
 ---@return integer? bufnr  the preview's buffer; nil when there is nothing to show
 function M.diff()
     local bufnr = panel.find_buf()
-    if not bufnr or not panel.state(bufnr) then
+    if not bufnr or not panel.is_panel(bufnr) then
         _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
         return
     end
@@ -292,7 +291,7 @@ end
 --- the `:Greplace diff` preview once it looks right, or with the panel closed.
 function M.apply()
     local bufnr = panel.find_buf()
-    if not bufnr or not panel.state(bufnr) then
+    if not bufnr or not panel.is_panel(bufnr) then
         _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
         return
     end

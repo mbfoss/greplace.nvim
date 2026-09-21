@@ -91,9 +91,7 @@ end
 --- behind.
 ---@param bufnr   integer
 ---@param matches greplace.Match[]
----@return { entries: table<integer, greplace.Entry>, order: integer[], index: table<integer, integer> } list
----        the entries keyed by anchor extmark id, the ids in listing order, and
----        each id's position in that order
+---@return greplace.List list
 ---@return greplace.Tracker tracker
 local function render(bufnr, matches)
     local lines = {}
@@ -136,7 +134,7 @@ local function render(bufnr, matches)
                 "GreplaceBufferIndicator",
             })
         end
-        local ok, id = pcall(set_anchor, bufnr, nil, nil, row - 1, virt)
+        local ok, id = pcall(set_anchor, bufnr, nil, row - 1, virt)
         -- An anchor that could not be placed would silently drop its match from
         -- the list the panel writes back, and every later row would still look
         -- fine -- so the whole render is abandoned instead, and the caller says

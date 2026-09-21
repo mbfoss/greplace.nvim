@@ -92,10 +92,10 @@ end
 function Child:watches()
     return self:lua([[
         local buf = vim.api.nvim_get_current_buf()
-        local st  = require("greplace.panel").state(buf)
-        st.ticks = 0
+        local panel = require("greplace.panel")
+        panel.ticks(buf, true)
         vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "probe" })
-        return st.ticks
+        return panel.ticks(buf)
     ]])
 end
 
@@ -260,7 +260,7 @@ describe("panel editing", function()
             local st  = require("greplace.panel").state(buf)
             local ns  = vim.api.nvim_get_namespaces()["greplace.anchor"]
             local rows, row = {}, 0
-            for _, id in ipairs(st.order) do
+            for _, id in ipairs(st.list.order) do
                 local m = vim.api.nvim_buf_get_extmark_by_id(buf, ns, id, { details = true })
                 if not m[3].invalid then rows[id], row = row, row + 1 end
             end

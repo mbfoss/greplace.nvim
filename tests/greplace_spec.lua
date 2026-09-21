@@ -462,7 +462,7 @@ describe("greplace", function()
         greplace.open("hit")
         local bufnr = assert(panel.find_buf())
         assert.is_true(vim.wait(5000, function()
-            return next(panel.state(bufnr).entries) ~= nil
+            return next(panel.state(bufnr).list.entries) ~= nil
         end, 20))
 
         local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
@@ -480,7 +480,7 @@ describe("greplace", function()
         greplace.open("hit")
         local bufnr = assert(panel.find_buf())
         assert.is_true(vim.wait(5000, function()
-            return next(panel.state(bufnr).entries) ~= nil
+            return next(panel.state(bufnr).list.entries) ~= nil
         end, 20))
 
         local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
@@ -501,7 +501,7 @@ describe("greplace", function()
         greplace.open("hit 1")
         assert.is_true(vim.wait(5000, function()
             local st = panel.state(bufnr)
-            return st ~= nil and not st.truncated and next(st.entries) ~= nil
+            return st ~= nil and not st.origin.truncated and next(st.list.entries) ~= nil
         end, 20))
         winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
         assert.is_nil(winbar:find("limit", 1, true))
@@ -533,7 +533,7 @@ describe("greplace", function()
         end, 20))
 
         assert.same({ "bravo here" }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
-        assert.equals("bravo", panel.state(bufnr).query)
+        assert.equals("bravo", panel.state(bufnr).origin.query)
     end)
 
     it("draws a `%` in a message as itself, not as a winbar item", function()
