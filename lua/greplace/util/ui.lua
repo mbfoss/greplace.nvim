@@ -129,14 +129,9 @@ function M.smart_open_file(filepath, line, col, activate)
         end
     end
 
-    local cur_win = vim.api.nvim_get_current_win()
     local winid = _get_regular_window()
     if activate ~= false then
         vim.api.nvim_set_current_win(winid)
-    elseif vim.api.nvim_win_is_valid(cur_win) then
-        -- Having no regular window to use, `_get_regular_window` split one
-        -- off and entered it.
-        vim.api.nvim_set_current_win(cur_win)
     end
 
     -- Exact-path lookup/create, no glob or fuzzy fallback. bufadd() only makes
