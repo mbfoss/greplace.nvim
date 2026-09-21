@@ -61,6 +61,8 @@ local _ns               = vim.api.nvim_create_namespace("greplace.anchor")
 -- The bounds of each match's text, keyed by its anchor's id.
 local _ns_bounds        = vim.api.nvim_create_namespace("greplace.bounds")
 local _ns_hl            = vim.api.nvim_create_namespace("greplace.match")
+-- What an edited line has changed, against the text it was rendered with.
+local _ns_diff          = vim.api.nvim_create_namespace("greplace.diff")
 local _ns_st            = vim.api.nvim_create_namespace("greplace.status")
 
 -- Drawn in front of the location of a match that came from a loaded buffer --
@@ -121,6 +123,10 @@ local _no_marker        = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker
 ---@field indicator boolean?  the rows draw the loaded-buffer column
 ---@field loaded table<integer, boolean>?  which anchors' files were open in a
 ---                        buffer when last drawn
+---@field subs   table<integer, integer[][]>?  each anchor's `{ start, end }` byte
+---                        spans of the query's hits, as rendered
+---@field hits_off table<integer, boolean>?  anchors whose hit highlights were
+---                        last laid against an edited line
 ---@field per_file table<string, integer>?  how many of each file's matches
 ---                        still have a line, for `stats.files`
 
@@ -274,6 +280,94 @@ local function set_marker(bufnr, state, id, row, changed)
     set_anchor(bufnr, state, id, row)
 end
 
+--- Highlight what row `row` holds that `old` did not. The diff is per
+--- character -- each one handed to `vim.text.diff` as a line of its own -- and
+--- the hunks come back as character indices, turned into byte columns here.
+--- A hunk that only removed text paints the character next to the gap.
+---@param bufnr integer
+---@param row   integer  0-indexed
+---@param old   string   the text the line was rendered with
+---@param text  string   the text it holds now
+local function mark_diff(bufnr, row, old, text)
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_diff, row, row + 1)
+    if old == text or text == "" then return end
+
+    -- Where each character of `s` starts (1-based bytes), one past the end
+    -- included so that a character's end is the start of the next.
+    local function starts(s)
+        local pos = vim.str_utf_pos(s)
+        pos[#pos + 1] = #s + 1
+        return pos
+    end
+    local function per_line(pos, s)
+        local out = {}
+        for i = 1, #pos - 1 do out[i] = s:sub(pos[i], pos[i + 1] - 1) end
+        return table.concat(out, "\n") .. "\n"
+    end
+
+    local a_pos, b_pos = starts(old), starts(text)
+    local ok, hunks = pcall(vim.text.diff, per_line(a_pos, old),
+        per_line(b_pos, text), { result_type = "indices" })
+    if not ok then return end
+    local chars = #b_pos - 1
+    assert(type(hunks) == "table")
+    for _, h in ipairs(hunks) do
+        local count_a, start_b, count_b = h[2], h[3], h[4]
+        local first, last, group
+        if count_b > 0 then
+            -- Text put in where there was none is an addition; text put in
+            -- place of other text is a change.
+            first, last = start_b, start_b + count_b - 1
+            group = count_a == 0 and "GreplaceDiffAdd" or "GreplaceDiff"
+        else
+            -- Text was removed between characters `start_b` and `start_b + 1`
+            -- (0 for the head of the line): the one after it carries the
+            -- mark, or the last one when it was the tail that went.
+            first = math.min(start_b + 1, chars)
+            last, group = first, "GreplaceDiffDelete"
+        end
+        vim.api.nvim_buf_set_extmark(bufnr, _ns_diff, row, b_pos[first] - 1, {
+            end_col  = b_pos[last + 1] - 1,
+            hl_group = group,
+            -- Above the query's own highlights, which take the default
+            -- extmark priority of 4096: where they overlap, the diff's
+            -- foreground and background both win.
+            priority = 4200,
+        })
+    end
+end
+
+--- Draw the search's own highlights on a match's row where -- and only where --
+--- the line still holds what the search found: the same bytes at the same
+--- columns as when it was rendered. An edit that moves the match, or that puts
+--- the query itself back in as its replacement, leaves the extmarks the render
+--- set pointing at text that is not a hit any more, so they are laid again
+--- from the spans the search reported instead of being trusted to follow the
+--- text.
+---@param bufnr integer
+---@param state greplace.PanelState
+---@param id    integer  anchor extmark id
+---@param row   integer  0-indexed
+---@param text  string   what the line holds now
+local function sync_hits(bufnr, state, id, row, text)
+    local spans = state.subs and state.subs[id]
+    if not spans then return end
+    local orig = state.entries[id].text
+    -- A line that is as rendered and was never touched needs nothing done.
+    local edited = text ~= orig
+    if not edited and not state.hits_off[id] then return end
+    state.hits_off[id] = edited or nil
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, row, row + 1)
+    for _, span in ipairs(spans) do
+        if text:sub(span[1] + 1, span[2]) == orig:sub(span[1] + 1, span[2]) then
+            vim.api.nvim_buf_set_extmark(bufnr, _ns_hl, row, span[1], {
+                end_col  = span[2],
+                hl_group = "GreplaceMatch",
+            })
+        end
+    end
+end
+
 --- Bring the anchors on rows `lo`..`hi` up to date with their lines, along
 --- with the winbar's counts. A change to those rows cannot give a line to, or
 --- take one from, an anchor on any other row -- row `hi` included, being where
@@ -309,6 +403,8 @@ local function redraw(bufnr, lo, hi)
             if not hide and row < total then
                 local text    = lines[row - lo + 1]
                 local changed = text ~= state.entries[id].text
+                mark_diff(bufnr, row, state.entries[id].text, text)
+                sync_hits(bufnr, state, id, row, text)
                 if changed ~= (state.changed[id] == true) then
                     state.changed[id] = changed or nil
                     state.stats.changes = state.stats.changes + (changed and 1 or -1)
@@ -1114,6 +1210,7 @@ local function create_buf(on_write, on_delete)
             vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
             vim.api.nvim_buf_clear_namespace(bufnr, _ns_bounds, 0, -1)
             vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+            vim.api.nvim_buf_clear_namespace(bufnr, _ns_diff, 0, -1)
             vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
             vim.bo[bufnr].modifiable = true
             for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -1372,6 +1469,7 @@ local function render(bufnr, matches)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_bounds, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_diff, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
     set_lines_no_undo(bufnr, lines)
 
@@ -1387,6 +1485,8 @@ local function render(bufnr, matches)
     state.stats               = { files = 0, lines = 0, changes = 0 }
     state.per_file            = {}
     state.loaded              = {}
+    state.subs                = {}
+    state.hits_off            = {}
 
     -- The indicator column is only drawn when some match needs it, so a search
     -- that touched no open buffer gives up no width to it. When drawn, every
@@ -1447,10 +1547,12 @@ local function render(bufnr, matches)
         -- and a `$`-anchored pattern lands there), and an out-of-range start
         -- column is an error, not a no-op.
         local len = #m.text
+        state.subs[id] = {}
         for _, sm in ipairs(m.subs) do
             local s = math.max(0, math.min(sm.s, len))
             local e = math.max(s, math.min(sm.e, len))
             if e > s then
+                table.insert(state.subs[id], { s, e })
                 local hl_ok, hl_err = pcall(vim.api.nvim_buf_set_extmark,
                     bufnr, _ns_hl, row - 1, s, {
                         end_col  = e,
@@ -1479,6 +1581,7 @@ local function set_status(bufnr, chunks)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_bounds, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_diff, 0, -1)
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
     set_lines_no_undo(bufnr, { "" })
     vim.api.nvim_buf_set_extmark(bufnr, _ns_st, 0, 0, {
@@ -1608,6 +1711,8 @@ function M.settle(bufnr)
     -- The highlighted query hits belong to the text as searched, not to what
     -- has been written over it since.
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, _ns_diff, 0, -1)
+    state.subs, state.hits_off = {}, {}
     redraw(bufnr, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1))
     vim.bo[bufnr].modified = false
     set_winbar(bufnr)
@@ -1661,7 +1766,7 @@ end
 --- after every colorscheme change, both of which clear such links.
 function M.setup_highlights()
     local defaults = {
-        GreplaceLocation        = { link = "Directory" },
+        GreplaceLocation        = { link = "@namespace" },
         GreplaceBufferIndicator = { link = "Special" },
         -- `NonText` rather than `Comment`: the plain `│` is scaffolding, and
         -- the dimmer it is, the more the `│` of an edited line stands out.
@@ -1677,6 +1782,12 @@ function M.setup_highlights()
         GreplaceMatch           = { link = "Label" },
         GreplaceLimit           = { link = "WarningMsg" },
         GreplaceChanged         = { link = "NonText" },
+        -- Explicit colours, foreground and background: a link to a colorscheme's
+        -- diff groups is often too faint to see against the text it marks.
+        -- Changed text, text put in where there was none, and text taken out.
+        GreplaceDiff            = { fg = "#2f2340", bg = "#d9c7f2", ctermfg = "Black", ctermbg = "Magenta" },
+        GreplaceDiffAdd         = { fg = "#1f3a2b", bg = "#b5e6c5", ctermfg = "Black", ctermbg = "Green" },
+        GreplaceDiffDelete      = { fg = "#4a2323", bg = "#f5b8b8", ctermfg = "Black", ctermbg = "Red" },
     }
     for name, def in pairs(defaults) do
         vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))
