@@ -120,14 +120,17 @@ end
 ---@param opts  greplace.OpenOpts?
 function M.open(query, opts)
     opts = opts or {}
-    local root = search.resolve_root(opts.cwd)
+    local root  = search.resolve_root(opts.cwd)
+    -- The search reads these while it runs (`rgflags.buffer_filter` keeps them
+    -- in its closure), so it gets a table of its own rather than the caller's.
+    local flags = opts.flags and vim.deepcopy(opts.flags)
     -- The panel goes up before the search does, so the results appear in a
     -- window that is already open and settled rather than one that springs up
     -- under the cursor whenever rg happens to finish. Until then it says it
     -- is searching.
     local args = {
         query    = query,
-        flags    = opts.flags,
+        flags    = flags,
         root     = root,
         height   = config.height,
         on_write  = apply_edits,
@@ -141,7 +144,7 @@ function M.open(query, opts)
 
     _cancel = search.run(query, {
             cwd   = root,
-            flags = opts.flags,
+            flags = flags,
             limit = config.limit,
         },
         function(matches, err, truncated)
