@@ -63,6 +63,15 @@ local _ns_bounds        = vim.api.nvim_create_namespace("greplace.bounds")
 local _ns_hl            = vim.api.nvim_create_namespace("greplace.match")
 local _ns_st            = vim.api.nvim_create_namespace("greplace.status")
 
+--- Take everything the panel drew off a buffer: anchors, bounds, match
+--- highlights and the status text.
+---@param bufnr integer
+local function clear_all(bufnr)
+    for _, ns in ipairs({ _ns, _ns_bounds, _ns_hl, _ns_st }) do
+        vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+    end
+end
+
 -- Drawn in front of the location of a match that was found in a loaded buffer
 -- -- and so shows the buffer's text, which may not be what is on disk. Fixed
 -- when the list is rendered: it says where the line came from, not whether
@@ -331,27 +340,46 @@ local function redraw(bufnr, lo, hi)
     end
 end
 
---- The anchor of the match a position belongs to: the nearest standing one at
---- or before row `row`, column `col`. Walked backwards from there rather than
---- over the whole list, so a panel holding thousands of matches is only walked
---- as far as the nearest one -- past the invalid anchors of removed matches,
---- which are stranded wherever their line was deleted and own no row.
+--- The first standing anchor met walking from `from` to `to`, in either
+--- direction. Walked outwards a few marks at a time rather than over the whole
+--- list, so a panel holding thousands of matches is only walked as far as the
+--- nearest one -- past the invalid anchors of removed matches, which are
+--- stranded wherever their line was deleted and own no row.
 ---@param bufnr integer
----@param row   integer  0-indexed
----@param col   integer  -1 for the end of the row
+---@param from  integer[]|integer
+---@param to    integer[]|integer
 ---@return table? mark  as `nvim_buf_get_extmarks` with `details`
-local function standing_before(bufnr, row, col)
+local function standing(bufnr, from, to)
     local limit = 8
     while true do
-        local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { row, col }, 0,
+        local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, from, to,
             { limit = limit, details = true })
         for _, mark in ipairs(marks) do
             if not is_hidden(mark) then return mark end
         end
-        -- Every one of them was a removed match's: there may be more behind.
+        -- Every one of them was a removed match's: there may be more further on.
         if #marks < limit then return end
         limit = limit * 2
     end
+end
+
+--- The anchor of the match a position belongs to: the nearest standing one at
+--- or before row `row`, column `col`.
+---@param bufnr integer
+---@param row   integer  0-indexed
+---@param col   integer  -1 for the end of the row
+---@return table? mark
+local function standing_before(bufnr, row, col)
+    return standing(bufnr, { row, col }, 0)
+end
+
+--- The first standing anchor at or after row `row`, if any.
+---@param bufnr integer
+---@param row   integer  0-indexed
+---@return table? mark
+local function standing_after(bufnr, row)
+    if row >= vim.api.nvim_buf_line_count(bufnr) then return end
+    return standing(bufnr, { row, 0 }, -1)
 end
 
 --- The length of row `row`, or 0 when there is no such row.
@@ -418,25 +446,6 @@ local function delete_row(bufnr, row)
     else
         -- The only row. Neovim keeps one empty line whatever is asked for.
         vim.api.nvim_buf_set_lines(bufnr, 0, 1, false, {})
-    end
-end
-
---- The first standing anchor at or after row `row`, if any. As
---- `standing_before`, walked outwards rather than over the whole list.
----@param bufnr integer
----@param row   integer  0-indexed
----@return table? mark
-local function standing_after(bufnr, row)
-    if row >= vim.api.nvim_buf_line_count(bufnr) then return end
-    local limit = 8
-    while true do
-        local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { row, 0 }, -1,
-            { limit = limit, details = true })
-        for _, mark in ipairs(marks) do
-            if not is_hidden(mark) then return mark end
-        end
-        if #marks < limit then return end
-        limit = limit * 2
     end
 end
 
@@ -1091,10 +1100,7 @@ local function create_buf(on_write, on_delete)
                 return
             end
             _state[bufnr] = nil
-            vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
-            vim.api.nvim_buf_clear_namespace(bufnr, _ns_bounds, 0, -1)
-            vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
-            vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
+            clear_all(bufnr)
             vim.bo[bufnr].modifiable = true
             for _, win in ipairs(vim.api.nvim_list_wins()) do
                 if vim.api.nvim_win_get_buf(win) == bufnr then
@@ -1244,11 +1250,10 @@ end
 ---@param bufnr  integer
 ---@param height integer
 local function show(bufnr, height)
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if vim.api.nvim_win_get_buf(win) == bufnr then
-            vim.api.nvim_set_current_win(win)
-            return
-        end
+    local win = M.win(bufnr)
+    if win then
+        vim.api.nvim_set_current_win(win)
+        return
     end
     vim.cmd(string.format("botright %dsplit", height))
     vim.api.nvim_win_set_buf(0, bufnr)
@@ -1276,9 +1281,7 @@ end
 --- there), leaving its contents -- unapplied edits included -- as they are.
 ---@param bufnr  integer
 ---@param height integer
-function M.show(bufnr, height)
-    show(bufnr, height)
-end
+M.show = show
 
 --- Take the panel off screen -- every window showing it in this tabpage, so
 --- that "off screen" is what it means even after the panel window was split.
@@ -1343,10 +1346,7 @@ local function render(bufnr, matches)
     for i, m in ipairs(matches) do lines[i] = m.text end
 
     vim.bo[bufnr].modifiable = true
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns_bounds, 0, -1)
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
+    clear_all(bufnr)
     set_lines_no_undo(bufnr, lines)
     if _drop_pending[bufnr] then _drop_pending[bufnr]() end
 
@@ -1448,10 +1448,7 @@ end
 local function set_status(bufnr, chunks)
     if not vim.api.nvim_buf_is_valid(bufnr) then return end
     vim.bo[bufnr].modifiable = true
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns, 0, -1)
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns_bounds, 0, -1)
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns_st, 0, -1)
+    clear_all(bufnr)
     set_lines_no_undo(bufnr, { "" })
     vim.api.nvim_buf_set_extmark(bufnr, _ns_st, 0, 0, {
         virt_text     = chunks,
@@ -1492,25 +1489,34 @@ local function render_failed(bufnr, err)
     M.set_message(bufnr, "render failed: " .. tostring(err), "ErrorMsg")
 end
 
+--- The state of a panel that holds no list yet.
+---@param opts { query:string, root:string, flags:table?, truncated:boolean?, source:string? }
+---@return greplace.PanelState
+local function new_state(opts)
+    return {
+        query     = opts.query,
+        root      = opts.root,
+        flags     = opts.flags,
+        -- Where the list came from, so a re-run knows what to run again: a
+        -- search ("search", the default) or the quickfix list ("quickfix").
+        source    = opts.source or "search",
+        entries   = {},
+        order     = {},
+        index     = {},
+        virt      = {},
+        hidden    = {},
+        truncated = opts.truncated or false,
+        changed   = {},
+    }
+end
+
 --- Open the panel before there are any results, showing the query and that the
 --- search is running. `M.open` takes the same buffer over when it comes back.
 ---@param opts { query:string, root:string, flags:table?, height:integer, on_write:fun(bufnr:integer), on_delete:fun()? }
 ---@return integer bufnr
 function M.open_loading(opts)
     local bufnr   = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
-    _state[bufnr] = {
-        query     = opts.query,
-        root      = opts.root,
-        flags     = opts.flags,
-        source    = "search",
-        entries   = {},
-        order     = {},
-        index     = {},
-        virt      = {},
-        hidden    = {},
-        truncated = false,
-        changed   = {},
-    }
+    _state[bufnr] = new_state(opts)
     show(bufnr, opts.height)
     set_winbar(bufnr, "searching ...")
     set_status(bufnr, {
@@ -1529,21 +1535,7 @@ end
 ---                     holds nothing editable
 function M.open(matches, opts)
     local bufnr = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
-    _state[bufnr] = {
-        query     = opts.query,
-        root      = opts.root,
-        flags     = opts.flags,
-        -- Where the list came from, so a re-run knows what to run again: a
-        -- search ("search", the default) or the quickfix list ("quickfix").
-        source    = opts.source or "search",
-        entries   = {},
-        order     = {},
-        index     = {},
-        virt      = {},
-        hidden    = {},
-        truncated = opts.truncated or false,
-        changed   = {},
-    }
+    _state[bufnr] = new_state(opts)
     show(bufnr, opts.height)
     local ok, err = pcall(render, bufnr, matches)
     if not ok then
