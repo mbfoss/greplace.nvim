@@ -63,8 +63,10 @@ local _ns_bounds        = vim.api.nvim_create_namespace("greplace.bounds")
 local _ns_hl            = vim.api.nvim_create_namespace("greplace.match")
 local _ns_st            = vim.api.nvim_create_namespace("greplace.status")
 
--- Drawn in front of the location of a match that came from a loaded buffer --
--- and so shows the buffer's text, which may not be what is on disk. A glyph
+-- Drawn in front of the location of a match that was found in a loaded buffer
+-- -- and so shows the buffer's text, which may not be what is on disk. Fixed
+-- when the list is rendered: it says where the line came from, not whether
+-- the file is open now. A glyph
 -- rather than only a highlight, which a colorscheme can leave looking like the
 -- plain one.
 local _buffer_indicator = "≡ "
@@ -119,9 +121,6 @@ local _no_marker        = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker
 ---                        one change whose text needs nothing done to it
 ---@field stats   greplace.Stats?  the winbar's counts; set once a result list
 ---                        is rendered
----@field indicator boolean?  the rows draw the loaded-buffer column
----@field loaded table<integer, boolean>?  which anchors' files were open in a
----                        buffer when last drawn
 ---@field per_file table<string, integer>?  how many of each file's matches
 ---                        still have a line, for `stats.files`
 
@@ -979,42 +978,6 @@ local function goto_change(bufnr, dir)
     vim.api.nvim_win_set_cursor(0, { target + 1, 0 })
 end
 
---- Redraw the loaded-buffer indicator of every row of a panel whose file has
---- been opened or closed since it was drawn.
----@param bufnr integer
-local function sync_indicators(bufnr)
-    local state = _state[bufnr]
-    if not state or not state.stats or not state.loaded
-        or not vim.api.nvim_buf_is_valid(bufnr) then
-        return
-    end
-    local bufs = util.buf_map()
-    local todo, any = {}, state.indicator
-    for id, entry in pairs(state.entries) do
-        local open = bufs[entry.path] ~= nil
-        any = any or open
-        if open ~= state.loaded[id] then todo[id] = open end
-    end
-    -- The first open buffer gives every row the column.
-    local all = any and not state.indicator
-    if all then
-        state.indicator = true
-        for _, virt in pairs(state.virt) do
-            table.insert(virt, 1, { _no_indicator, "GreplaceBufferIndicator" })
-        end
-    end
-    if not all and not next(todo) then return end
-    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns, 0, -1,
-        { details = true })) do
-        local id = mark[1]
-        if state.entries[id] and (all or todo[id] ~= nil) then
-            if todo[id] ~= nil then state.loaded[id] = todo[id] end
-            state.virt[id][1][1] = state.loaded[id] and _buffer_indicator or _no_indicator
-            if not is_hidden(mark) then set_anchor(bufnr, state, id, mark[2]) end
-        end
-    end
-end
-
 ---@param on_write  fun(bufnr:integer)  `:w` in the panel
 ---@param on_delete fun()?  the panel was deleted or wiped out
 ---@return integer bufnr
@@ -1154,23 +1117,6 @@ local function create_buf(on_write, on_delete)
             if vim.api.nvim_buf_is_valid(bufnr) then
                 vim.bo[bufnr].modified = false
             end
-        end,
-    })
-
-    -- Not `buffer`-local: it is other buffers being opened and closed that
-    -- changes the indicators. Part of the panel's group, so it goes with it.
-    local sync_pending = false
-    vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile", "BufUnload", "BufDelete", "BufWipeout" }, {
-        group    = group,
-        desc     = "greplace: keep the loaded-buffer indicators current",
-        callback = function()
-            if sync_pending then return end
-            sync_pending = true
-            -- After the event, when the buffer has finished loading or unloading.
-            vim.schedule(function()
-                sync_pending = false
-                sync_indicators(bufnr)
-            end)
         end,
     })
 
@@ -1415,7 +1361,6 @@ local function render(bufnr, matches)
     state.seq, state.seq_last = undo_seq(bufnr)
     state.stats               = { files = 0, lines = 0, changes = 0 }
     state.per_file            = {}
-    state.loaded              = {}
 
     -- The indicator column is only drawn when some match needs it, so a search
     -- that touched no open buffer gives up no width to it. When drawn, every
@@ -1426,7 +1371,6 @@ local function render(bufnr, matches)
             indicator = true; break
         end
     end
-    state.indicator = indicator
 
     for row, m in ipairs(matches) do
         -- Cropped on the left: the tail -- file name and line number -- is what
@@ -1460,7 +1404,6 @@ local function render(bufnr, matches)
         end
         set_bounds(bufnr, id, row - 1, #m.text)
         state.virt[id]    = virt
-        state.loaded[id]  = m.bufnr ~= nil
         state.hidden[id]  = false
         state.order[row]  = id
         state.index[id]   = row
@@ -1544,7 +1487,7 @@ local function render_failed(bufnr, err)
     if state then
         state.entries, state.order, state.index = {}, {}, {}
         state.virt, state.hidden, state.changed = {}, {}, {}
-        state.stats, state.per_file, state.loaded = nil, nil, nil
+        state.stats, state.per_file = nil, nil
     end
     M.set_message(bufnr, "render failed: " .. tostring(err), "ErrorMsg")
 end
