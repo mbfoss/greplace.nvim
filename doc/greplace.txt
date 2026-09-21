@@ -336,7 +336,7 @@ warning, since `setup()` would otherwise accept a misspelling in silence.
   -------------------------------------------------------------------------
   Group                     Default                 Meaning
   ------------------------- ----------------------- -----------------------
-  GreplaceLocation          Directory               file:line of a match
+  GreplaceLocation          @namespace              file:line of a match
 
   GreplaceBufferIndicator   Special                 the ≡ in front of a
                                                     match from an open
