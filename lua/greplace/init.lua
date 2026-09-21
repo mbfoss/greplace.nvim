@@ -77,7 +77,7 @@ end
 ---@param bufnr integer
 local function apply_edits(bufnr)
     local state = panel.state(bufnr)
-    if not state or not state.stats or state.message then
+    if not state or not state.tracker or state.message then
         vim.bo[bufnr].modified = false
         _notify("no list to apply", vim.log.levels.WARN)
         return

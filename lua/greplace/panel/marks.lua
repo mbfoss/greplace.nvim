@@ -48,7 +48,8 @@
 --
 -- Showing that a line has been edited is not this module's business: `redraw`
 -- says when a line starts or stops differing from its rendered text, and
--- `greplace.panel.render` draws the marker.
+-- `greplace.panel` records it and has the marker drawn. The panel's state is
+-- only read here.
 -- ---------------------------------------------------------------------------
 
 local _ns              = vim.api.nvim_create_namespace("greplace.anchor")
@@ -75,7 +76,7 @@ local _ns_bounds       = vim.api.nvim_create_namespace("greplace.bounds")
 local function set_anchor(bufnr, state, id, row, virt)
     return vim.api.nvim_buf_set_extmark(bufnr, _ns, row, 0, {
         id                = id,
-        virt_text         = virt or state.virt[id],
+        virt_text         = virt or state.tracker.drawn[id],
         virt_text_pos     = "inline",
         -- Plain gravity: the location is drawn in front of the line, and
         -- text typed at the start of one belongs after it rather than before.
@@ -143,26 +144,8 @@ local function is_hidden(mark)
     return mark[4].invalid == true
 end
 
---- Add a match to the winbar's counts (`n = 1`) or take it out (`n = -1`), as
---- its line comes back or is removed.
----@param state greplace.PanelState
----@param id    integer  anchor extmark id
----@param n     1|-1
-local function tally(state, id, n)
-    local stats, per_file = assert(state.stats), assert(state.per_file)
-    local entry = state.entries[id]
-    stats.lines = stats.lines + n
-    if state.changed[id] then stats.changes = stats.changes + n end
-    local left = (per_file[entry.path] or 0) + n
-    per_file[entry.path] = left
-    -- A file counts while any of its matches does.
-    if left == (n > 0 and 1 or 0) then
-        stats.files = stats.files + n
-    end
-end
-
---- Bring the anchors on rows `lo`..`hi` up to date with their lines, along
---- with the winbar's counts. A change to those rows cannot give a line to, or
+--- Read the anchors on rows `lo`..`hi` against their lines, and say what
+--- differs from what the tracker holds. A change to those rows cannot give a line to, or
 --- take one from, an anchor on any other row -- row `hi` included, being where
 --- the anchors of lines deleted just above it end up.
 ---
@@ -171,7 +154,8 @@ end
 --- the bookkeeping the marks cannot do -- the winbar's counts following a
 --- match out of the list and back in -- and telling the caller when a line
 --- starts or stops holding the text it was rendered with, so that it can show
---- it (`on_changed`).
+--- it. Both come back as moves, and the caller applies them: nothing of the
+--- state is written here.
 ---
 --- An extmark is only re-set when what it draws changes: this runs on every
 --- edit, and re-setting even a handful of anchors per keystroke is not free.
@@ -179,11 +163,14 @@ end
 ---@param state greplace.PanelState
 ---@param lo    integer  0-indexed
 ---@param hi    integer  0-indexed, inclusive
----@param on_changed fun(bufnr:integer, state:greplace.PanelState, id:integer, row:integer, changed:boolean)
----                  called when the line of anchor `id`, now on row `row`,
----                  differs from its rendered text (`changed`) or is back to it
-local function redraw(bufnr, state, lo, hi, on_changed)
-    if not state.stats then return end
+---@return { id:integer, row:integer?, hidden:boolean?, changed:boolean? }[] moves
+---        `hidden`: anchor `id` lost its line, or got it back; `changed`: the
+---        line of anchor `id`, now on row `row`, differs from its rendered text
+---        or is back to it
+local function redraw(bufnr, state, lo, hi)
+    local moves   = {}
+    local tracker = state.tracker
+    if not tracker then return moves end
 
     local total = vim.api.nvim_buf_line_count(bufnr)
     local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, { lo, 0 }, { hi, -1 },
@@ -193,17 +180,14 @@ local function redraw(bufnr, state, lo, hi, on_changed)
         local id, row = mark[1], mark[2]
         local hide    = is_hidden(mark)
         if state.entries[id] then
-            if state.hidden[id] ~= hide then
-                state.hidden[id] = hide
-                tally(state, id, hide and -1 or 1)
+            if tracker:is_hidden(id) ~= hide then
+                moves[#moves + 1] = { id = id, hidden = hide }
             end
             if not hide and row < total then
                 local text    = lines[row - lo + 1]
                 local changed = text ~= state.entries[id].text
-                if changed ~= (state.changed[id] == true) then
-                    state.changed[id] = changed or nil
-                    state.stats.changes = state.stats.changes + (changed and 1 or -1)
-                    on_changed(bufnr, state, id, row, changed)
+                if changed ~= tracker:is_changed(id) then
+                    moves[#moves + 1] = { id = id, row = row, changed = changed }
                 end
                 -- And the bounds back around the line, which the edit may
                 -- have grown or shrunk at either end without moving them.
@@ -214,6 +198,7 @@ local function redraw(bufnr, state, lo, hi, on_changed)
             end
         end
     end
+    return moves
 end
 
 --- The first standing anchor met walking from `from` to `to`, in either
@@ -516,7 +501,7 @@ end
 ---@return boolean repaired
 ---@return boolean? edited  and whether any line had to be rewritten for it
 local function repair(bufnr, state, lo, hi, about)
-    if not state.stats then return false end
+    if not state.tracker then return false end
     local total = vim.api.nvim_buf_line_count(bufnr)
     lo = math.max(0, math.min(lo, total - 1))
     hi = math.max(lo, math.min(hi, total - 1))
@@ -663,7 +648,6 @@ return {
     set_anchor      = set_anchor,
     set_bounds      = set_bounds,
     is_hidden       = is_hidden,
-    tally           = tally,
     redraw          = redraw,
     standing_before = standing_before,
     restore_marks   = restore_marks,

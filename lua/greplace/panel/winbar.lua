@@ -4,18 +4,13 @@ local config = require("greplace.config").current
 
 local M = {}
 
----@class greplace.Stats
----@field files   integer  distinct files still listed
----@field lines   integer  matches still listed (a removed one does not count)
----@field changes integer  listed matches whose text no longer matches the source
-
 --- What the panel currently holds. A removed line drops out of every count --
 --- it is no longer part of the replacement. The counts are kept up to date by
 --- `redraw`, which runs shortly after an edit rather than within it.
 ---@param state greplace.PanelState?
 ---@return greplace.Stats?  nil when the panel holds no rendered list
 function M.stats(state)
-    return state and state.stats and vim.deepcopy(state.stats)
+    return state and state.tracker and state.tracker:snapshot()
 end
 
 ---@param n    integer
@@ -37,7 +32,7 @@ function M.set_winbar(bufnr, state, status)
     -- A final message outlives the buffer write that showed it, so that any
     -- redraw of the winbar puts it back rather than the counts of an empty
     -- panel.
-    local st   = state.stats
+    local st   = state.tracker and state.tracker.stats
     local text = status or state.message
     if not text then
         text = st and string.format("%s  %s  %s",

@@ -29,12 +29,19 @@ local _ns_hl             = draw.ns_hl
 local clear_all          = draw.clear_all
 local is_hidden          = marks.is_hidden
 local redraw             = marks.redraw
+local set_anchor         = marks.set_anchor
 local standing_before    = marks.standing_before
 local restore_marks      = marks.restore_marks
 local guard_lines        = marks.guard_lines
 local undo_seq           = marks.undo_seq
 local set_winbar         = winbar.set_winbar
 local set_status         = draw.set_status
+
+-- The panel is the only module that writes a `greplace.PanelState`. `render`
+-- hands back a list and a tracker, `marks.redraw` reports what changed on the
+-- lines, and both are taken into the state below (`render_list`,
+-- `redraw_marks`); the tracker holds what changes as the list is edited, and
+-- only it moves it.
 
 ---@class greplace.Entry
 ---@field path    string   absolute file path
@@ -43,37 +50,30 @@ local set_status         = draw.set_status
 ---@field text    string   the source line as it was when the panel rendered
 
 ---State of the one panel buffer: the anchor extmark id of each match, and the
----query it was built from.
+---query it was built from. Written by this module alone; the others read it.
 ---@class greplace.PanelState
 ---@field query   string
 ---@field source  string   where the list came from: "search" or "quickfix"
 ---@field root    string
 ---@field flags   table?   `:Gsearch` flags the search was run with, so
 ---                        that re-running it means the same search
----@field entries table<integer, greplace.Entry>  keyed by anchor extmark id
+---@field entries table<integer, greplace.Entry>  keyed by anchor extmark id;
+---                        replaced by a render or a write, never edited
 ---@field order   integer[]  anchor extmark ids in listing order
 ---@field index   table<integer, integer>  each anchor's position in `order`
----@field virt    table<integer, table[]>  each anchor's virtual text chunks
----@field hidden  table<integer, boolean>  which anchors are invalid -- their
----                        line was removed -- as of the last `redraw`, so that
----                        the counts can follow a match dropping out of the
----                        list and coming back
+---@field tracker greplace.Tracker?  which matches lost their line or were
+---                        edited, the winbar's counts and what each anchor
+---                        draws; set once a result list is rendered
 ---@field truncated boolean  the search stopped at the match limit, so this is
 ---                          the first `limit` matches of more
 ---@field message string?  final status -- "no matches", or the error that
 ---                       ended the search -- kept so a redraw can restore it
----@field changed table<integer, boolean>  anchors whose line no longer holds
----                       the text it was rendered with, and so draw the marker
 ---@field ticks   integer?  how many changes the line watch has seen, which is
 ---                        how a spec tells one watch from two
 ---@field seq      integer?  the undo state the last pass saw, and
 ---@field seq_last integer?  the newest one there was: an undo or a redo moves
 ---                        between states without adding one, and that is the
 ---                        one change whose text needs nothing done to it
----@field stats   greplace.Stats?  the winbar's counts; set once a result list
----                        is rendered
----@field per_file table<string, integer>?  how many of each file's matches
----                        still have a line, for `stats.files`
 
 ---@class greplace.Region
 ---@field id    integer   the anchor extmark id of the match
@@ -182,7 +182,7 @@ end
 local function goto_change(bufnr, dir)
     local state = _state[bufnr]
     if not state then return end
-    if not state.stats or state.stats.changes == 0 then
+    if not state.tracker or state.tracker.stats.changes == 0 then
         vim.api.nvim_echo({ { "greplace: nothing has been edited" } }, false, {})
         return
     end
@@ -200,7 +200,7 @@ local function goto_change(bufnr, dir)
     -- Walked from the cursor rather than gathered and sorted: the anchors come
     -- back in the order they are asked for, so the first edited one found is
     -- the one to move to, and a panel holding thousands of matches is only
-    -- walked as far as the next edit. `state.changed` is keyed by anchor, and
+    -- walked as far as the next edit. The tracker's `changed` is keyed by anchor, and
     -- an anchor's row is where its line begins, so the row it gives is the
     -- edited line itself. Deleting a line leaves its anchor on the row of the
     -- next one, so an edited row can be reached twice over; being in order,
@@ -221,7 +221,7 @@ local function goto_change(bufnr, dir)
         for _, mark in ipairs(marks) do
             -- A removed match keeps its changed flag but no row: its anchor is
             -- stranded on whichever line is next.
-            if state.changed[mark[1]] and not is_hidden(mark) and mark[2] ~= target then
+            if state.tracker:is_changed(mark[1]) and not is_hidden(mark) and mark[2] ~= target then
                 target = mark[2]
                 left   = left - 1
                 -- The rest of the walk is what a count asked for; the edits
@@ -239,6 +239,27 @@ local function goto_change(bufnr, dir)
     -- A jump, so `''` and `<C-o>` come back to where the cursor was.
     vim.cmd("normal! m'")
     vim.api.nvim_win_set_cursor(0, { target + 1, 0 })
+end
+
+--- Read rows `lo`..`hi` against the list, and take what differs into the
+--- tracker: a match that lost its line or got it back, a line that started or
+--- stopped differing from its rendered text -- which is also drawn.
+---@param bufnr integer
+---@param state greplace.PanelState
+---@param lo    integer  0-indexed
+---@param hi    integer  0-indexed, inclusive
+local function redraw_marks(bufnr, state, lo, hi)
+    local tracker = state.tracker
+    for _, move in ipairs(redraw(bufnr, state, lo, hi)) do
+        if move.hidden ~= nil then
+            tracker:set_hidden(move.id, move.hidden)
+        end
+        if move.changed ~= nil then
+            tracker:set_changed(move.id, move.changed)
+            tracker:set_drawn(move.id, draw.with_marker(tracker.drawn[move.id], move.changed))
+            set_anchor(bufnr, state, move.id, move.row)
+        end
+    end
 end
 
 ---@param on_write  fun(bufnr:integer)  `:w` in the panel
@@ -341,7 +362,7 @@ local function create_buf(on_write, on_delete)
         desc     = "greplace: a reload refills the panel from the stored lines",
         callback = function()
             local state = _state[bufnr]
-            if state and state.stats then
+            if state and state.tracker then
                 local entries = {}
                 for _, id in ipairs(state.order) do
                     entries[#entries + 1] = state.entries[id]
@@ -471,7 +492,7 @@ local function create_buf(on_write, on_delete)
                     -- back onto the lines they were dragged off.
                     local seq, seq_last = undo_seq(bufnr)
                     local repaired      = false
-                    if st.stats and seq_last == st.seq_last and seq ~= st.seq then
+                    if st.tracker and seq_last == st.seq_last and seq ~= st.seq then
                         repairs = 0
                         restore_marks(bufnr, st, lo, hi)
                         -- A repair is a change of its own, which gets a pass of
@@ -489,8 +510,8 @@ local function create_buf(on_write, on_delete)
                     -- state have moved since it was read above.
                     if repaired then seq, seq_last = undo_seq(bufnr) end
                     st.seq, st.seq_last = seq, seq_last
-                    redraw(bufnr, st, lo, hi, draw.set_marker)
-                    if st.stats then set_winbar(bufnr, st) end
+                    redraw_marks(bufnr, st, lo, hi)
+                    if st.tracker then set_winbar(bufnr, st) end
                 end)
             end,
         })
@@ -580,11 +601,20 @@ local function new_state(opts)
         entries   = {},
         order     = {},
         index     = {},
-        virt      = {},
-        hidden    = {},
         truncated = opts.truncated or false,
-        changed   = {},
     }
+end
+
+--- Put a final message in place of the list, and remember it so that a redraw
+--- of the winbar restores it.
+---@param bufnr integer
+---@param state greplace.PanelState
+---@param msg   string
+---@param hl    string?
+local function show_message(bufnr, state, msg, hl)
+    state.message = msg
+    set_status(bufnr, { { msg, hl or "GreplaceStatus" } })
+    set_winbar(bufnr, state, msg)
 end
 
 --- Render a result list into the panel. A render that fails leaves the panel
@@ -594,15 +624,27 @@ end
 ---@param matches greplace.Match[]
 ---@return string? err
 local function render_list(bufnr, matches)
-    local state   = assert(_state[bufnr])
-    local ok, err = pcall(draw.render, bufnr, state, matches)
+    local state = assert(_state[bufnr])
+    local ok, list, tracker = pcall(draw.render, bufnr, matches)
     -- The pass the write queued has nothing to find in what was just laid out.
     local drop = _drop_pending[bufnr]
     if drop then drop() end
     if not ok then
-        draw.render_failed(bufnr, state, err)
-        return tostring(err)
+        -- Nothing of the list is kept: a reload refills the panel from
+        -- `state.order`, and would otherwise bring a partial one back,
+        -- editable. `show_message` also makes the buffer unmodifiable, so
+        -- nothing is written back from it.
+        state.entries, state.order, state.index, state.tracker = {}, {}, {}, nil
+        show_message(bufnr, state, "render failed: " .. tostring(list), "ErrorMsg")
+        return tostring(list)
     end
+    state.entries, state.order, state.index = list.entries, list.order, list.index
+    state.tracker = tracker
+    -- A status from before is not this list's.
+    state.message = nil
+    state.ticks   = 0
+    state.seq, state.seq_last = undo_seq(bufnr)
+    set_winbar(bufnr, state)
 end
 
 --- Open the panel before there are any results, showing the query and that the
@@ -676,7 +718,7 @@ end
 ---@param hl    string?
 function M.set_message(bufnr, msg, hl)
     local state = _state[bufnr]
-    if state then draw.set_message(bufnr, state, msg, hl) end
+    if state then show_message(bufnr, state, msg, hl) end
 end
 
 --- Redraw the markers and counts after a write, leaving the text and undo
@@ -687,17 +729,19 @@ end
 ---                                  restated their entries
 function M.settle(bufnr, regions)
     local state = _state[bufnr]
-    if not state or not state.stats then return end
+    if not state or not state.tracker then return end
+    -- A table of its own rather than the entries edited in place: what
+    -- `state.entries` was is not touched.
+    local entries = {}
+    for id, entry in pairs(state.entries) do entries[id] = entry end
     for _, region in ipairs(regions) do
-        if state.entries[region.id] then
-            state.entries[region.id] = region.entry
-        end
+        if entries[region.id] then entries[region.id] = region.entry end
     end
+    state.entries = entries
     -- The highlighted query hits belong to the text as searched, not to what
     -- has been written over it since.
     vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
-    redraw(bufnr, state, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1),
-        draw.set_marker)
+    redraw_marks(bufnr, state, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1))
     vim.bo[bufnr].modified = false
     set_winbar(bufnr, state)
 end

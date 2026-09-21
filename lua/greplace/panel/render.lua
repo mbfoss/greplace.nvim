@@ -4,13 +4,10 @@
 local config        = require("greplace.config").current
 local strutil       = require("greplace.util.strutil")
 local marks         = require("greplace.panel.marks")
-local winbar        = require("greplace.panel.winbar")
+local tracker       = require("greplace.panel.tracker")
 
 local set_anchor    = marks.set_anchor
 local set_bounds    = marks.set_bounds
-local tally         = marks.tally
-local undo_seq      = marks.undo_seq
-local set_winbar    = winbar.set_winbar
 
 local _ns          = marks.ns
 local _ns_bounds   = marks.ns_bounds
@@ -42,17 +39,17 @@ local _no_indicator     = string.rep(" ", vim.fn.strdisplaywidth(_buffer_indicat
 local _changed_marker   = "•"
 local _no_marker        = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker))
 
---- Show or clear an anchor's changed marker.
----@param bufnr   integer
----@param state   greplace.PanelState
----@param id      integer  anchor extmark id
----@param row     integer
+--- The chunks of an anchor with its changed marker shown or cleared, as a list
+--- of their own: the ones given are left as they were.
+---@param chunks  table[]
 ---@param changed boolean
-local function set_marker(bufnr, state, id, row, changed)
-    local virt = state.virt[id]
+---@return table[]
+local function with_marker(chunks, changed)
+    local out = {}
+    for i, chunk in ipairs(chunks) do out[i] = chunk end
     -- The marker is the chunk just before the `│`, the last one.
-    virt[#virt - 1][1] = changed and _changed_marker or _no_marker
-    set_anchor(bufnr, state, id, row)
+    out[#out - 1] = { changed and _changed_marker or _no_marker, "GreplaceChanged" }
+    return out
 end
 
 --- Width of the `file:line` column: the widest location in the list, but never
@@ -89,11 +86,16 @@ local function set_lines_no_undo(bufnr, lines)
 end
 
 --- Write the match list into the panel buffer and (re)anchor one extmark per
---- match. Entries are keyed by the returned extmark ids.
+--- match. Nothing is recorded anywhere but in what is returned, which the
+--- caller takes as the panel's list: a render that fails leaves no half of one
+--- behind.
 ---@param bufnr   integer
----@param state   greplace.PanelState
 ---@param matches greplace.Match[]
-local function render(bufnr, state, matches)
+---@return { entries: table<integer, greplace.Entry>, order: integer[], index: table<integer, integer> } list
+---        the entries keyed by anchor extmark id, the ids in listing order, and
+---        each id's position in that order
+---@return greplace.Tracker tracker
+local function render(bufnr, matches)
     local lines = {}
     for i, m in ipairs(matches) do lines[i] = m.text end
 
@@ -101,24 +103,13 @@ local function render(bufnr, state, matches)
     clear_all(bufnr)
     set_lines_no_undo(bufnr, lines)
 
-    local width              = location_width(matches)
-    state.entries             = {}
-    state.order               = {}
-    state.index               = {}
-    state.virt                = {}
-    state.hidden              = {}
-    state.changed             = {}
-    state.ticks               = 0
-    -- A status from before is not this list's.
-    state.message             = nil
-    state.seq, state.seq_last = undo_seq(bufnr)
-    state.stats               = { files = 0, lines = 0, changes = 0 }
-    state.per_file            = {}
+    local width   = location_width(matches)
+    local entries, order, index, drawn = {}, {}, {}, {}
 
     -- The indicator column is only drawn when some match needs it, so a search
     -- that touched no open buffer gives up no width to it. When drawn, every
     -- row reserves it, keeping the locations and the `│` aligned.
-    local indicator           = false
+    local indicator = false
     for _, m in ipairs(matches) do
         if m.bufnr then
             indicator = true; break
@@ -145,7 +136,7 @@ local function render(bufnr, state, matches)
                 "GreplaceBufferIndicator",
             })
         end
-        local ok, id = pcall(set_anchor, bufnr, state, nil, row - 1, virt)
+        local ok, id = pcall(set_anchor, bufnr, nil, nil, row - 1, virt)
         -- An anchor that could not be placed would silently drop its match from
         -- the list the panel writes back, and every later row would still look
         -- fine -- so the whole render is abandoned instead, and the caller says
@@ -156,17 +147,15 @@ local function render(bufnr, state, matches)
                 m.relpath, m.lnum, tostring(id)), 0)
         end
         set_bounds(bufnr, id, row - 1, #m.text)
-        state.virt[id]    = virt
-        state.hidden[id]  = false
-        state.order[row]  = id
-        state.index[id]   = row
-        state.entries[id] = {
+        drawn[id]   = virt
+        order[row]  = id
+        index[id]   = row
+        entries[id] = {
             path    = m.path,
             relpath = m.relpath,
             lnum    = m.lnum,
             text    = m.text,
         }
-        tally(state, id, 1)
         -- Both ends are clamped, not just the end one: a match span can start
         -- past the line we kept (rg counts the line terminator it stripped,
         -- and a `$`-anchored pattern lands there), and an out-of-range start
@@ -190,7 +179,7 @@ local function render(bufnr, state, matches)
     end
 
     vim.bo[bufnr].modified = false
-    set_winbar(bufnr, state)
+    return { entries = entries, order = order, index = index }, tracker.new(entries, drawn)
 end
 
 --- Put a one-line status in the panel: the buffer holds a single blank,
@@ -211,40 +200,10 @@ local function set_status(bufnr, chunks)
     vim.bo[bufnr].modifiable = false
 end
 
---- Replace the "searching" status with a final message -- "no matches", or
---- the error that ended the search. The panel stays up: it was opened on the
---- user's keystroke, and yanking it away again is more startling than leaving
---- it saying what happened.
----@param bufnr integer
----@param state greplace.PanelState
----@param msg   string
----@param hl    string?
-function M.set_message(bufnr, state, msg, hl)
-    state.message = msg
-    set_status(bufnr, { { msg, hl or "GreplaceStatus" } })
-    set_winbar(bufnr, state, msg)
-end
-
---- A render that did not finish leaves the panel holding the error rather than
---- a list that is missing rows without saying which. What it had recorded of
---- the list goes too: a reload refills the panel from `state.order`, and would
---- otherwise bring the partial list back, editable. `set_message` also makes
---- the buffer unmodifiable, so nothing is written back from it.
----@param bufnr integer
----@param state greplace.PanelState
----@param err   any
-local function render_failed(bufnr, state, err)
-    state.entries, state.order, state.index = {}, {}, {}
-    state.virt, state.hidden, state.changed = {}, {}, {}
-    state.stats, state.per_file = nil, nil
-    M.set_message(bufnr, state, "render failed: " .. tostring(err), "ErrorMsg")
-end
-
 M.ns_hl = _ns_hl
-M.set_marker = set_marker
+M.with_marker = with_marker
 M.clear_all = clear_all
 M.render = render
 M.set_status = set_status
-M.render_failed = render_failed
 
 return M
