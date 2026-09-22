@@ -128,9 +128,14 @@ function M.open(query, opts)
     -- window that is already open and settled rather than one that springs up
     -- under the cursor whenever rg happens to finish. Until then it says it
     -- is searching.
+    -- `--max-count` is the flag line's own limit, in place of the configured
+    -- one; the panel is told which, for the note it draws when it is reached.
+    local limit = require("greplace.rgflags").max_count(flags or {})
+        or config.limit
     local args = {
         query    = query,
         flags    = flags,
+        limit    = limit,
         root     = root,
         height   = config.height,
         on_write  = apply_edits,
@@ -145,7 +150,7 @@ function M.open(query, opts)
     _cancel = search.run(query, {
             cwd   = root,
             flags = flags,
-            limit = config.limit,
+            limit = limit,
         },
         function(matches, err, truncated)
             _cancel = nil

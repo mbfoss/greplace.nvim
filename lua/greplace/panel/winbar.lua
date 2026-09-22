@@ -19,13 +19,16 @@ end
 ---                          final message
 ---@param st        greplace.Stats?  the counts of a rendered list
 ---@param truncated boolean  the list is the first `limit` matches of more
-function M.set_winbar(bufnr, text, st, truncated)
+---@param limit     integer?  the limit it stopped at (default: the configured
+---                           one), which `--max-count` moves
+function M.set_winbar(bufnr, text, st, truncated, limit)
+    limit = limit or config.limit
     if not config.winbar then return end
 
     if not text then
-        text = st and string.format("%s  %s  %s",
-            plural(st.files, "file"), plural(st.lines, "line"),
-            plural(st.changes, "change")) or ""
+        text = st and string.format("%s (%d changed)  %s (%d changed)",
+            plural(st.files, "file"), st.changed_files,
+            plural(st.lines, "line"), st.changes) or ""
     end
 
     -- A truncated list is a partial answer to the query: the matches beyond
@@ -33,10 +36,9 @@ function M.set_winbar(bufnr, text, st, truncated)
     -- Say so while the panel still lists the full `limit` of them. Once lines
     -- are removed from it, the counts no longer sit at the limit, and the note
     -- would only be noise; an undo that brings them back brings it back too.
-    local limit = ""
-    if truncated and (not st or st.lines >= config.limit) then
-        limit = string.format("  %%#GreplaceLimit#limit of %d reached",
-            config.limit)
+    local note = ""
+    if truncated and (not st or st.lines >= limit) then
+        note = string.format("  %%#GreplaceLimit#limit of %d reached", limit)
     end
 
     -- `text` is not always the plugin's own words: a query the user typed and
@@ -47,7 +49,7 @@ function M.set_winbar(bufnr, text, st, truncated)
 
     -- Trailing `%=` so the text sits left and the highlight does not run on
     -- past it.
-    local bar = string.format(" %%#GreplaceStatus#%s%s%%=", text, limit)
+    local bar = string.format(" %%#GreplaceStatus#%s%s%%=", text, note)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
         -- Only when it differs: setting an option redraws the bar, and this
         -- runs behind every edit.

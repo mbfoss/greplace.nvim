@@ -65,6 +65,8 @@ end
 ---@field source    string   where the list came from: "search" or "quickfix"
 ---@field truncated boolean  the search stopped at the match limit, so this is
 ---                          the first `limit` matches of more
+---@field limit     integer  the match limit that search ran under: the
+---                          configured one, or what `--max-count` asked for
 
 ---The matches of a rendered list, as `render` lays them out.
 ---@class greplace.List
@@ -127,6 +129,7 @@ function M.origin(bufnr)
         flags     = o.flags and vim.deepcopy(o.flags),
         source    = o.source,
         truncated = o.truncated,
+        limit     = o.limit,
     }
 end
 
@@ -283,7 +286,8 @@ end
 local function set_winbar(bufnr, state, status)
     if not state then return end
     winbar.set_winbar(bufnr, status or state.message,
-        state.tracker and state.tracker.stats, state.origin.truncated)
+        state.tracker and state.tracker.stats, state.origin.truncated,
+        state.origin.limit)
 end
 
 --- Read rows `lo`..`hi` against the list, and take what differs into the
@@ -692,7 +696,7 @@ local function empty_list()
 end
 
 --- The state of a panel that holds no list yet.
----@param opts { query:string, root:string, flags:table?, truncated:boolean?, source:string? }
+---@param opts { query:string, root:string, flags:table?, truncated:boolean?, source:string?, limit:integer? }
 ---@return greplace.PanelState
 local function new_state(opts)
     return {
@@ -706,6 +710,10 @@ local function new_state(opts)
             -- search ("search", the default) or the quickfix list ("quickfix").
             source    = opts.source or "search",
             truncated = opts.truncated or false,
+            -- The limit the list was collected under, which `--max-count`
+            -- moves off the configured one; a quickfix list has none of its
+            -- own, and is never truncated either.
+            limit     = opts.limit or config.limit,
         },
         list   = empty_list(),
     }

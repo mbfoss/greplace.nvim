@@ -13,6 +13,7 @@ local M = {}
 ---@field files   integer  distinct files still listed
 ---@field lines   integer  matches still listed (a removed one does not count)
 ---@field changes integer  listed matches whose text no longer matches the source
+---@field changed_files integer  listed files with at least one such match
 
 ---@class greplace.Tracker
 ---@field stats greplace.Stats  read only outside this module
@@ -24,6 +25,9 @@ local M = {}
 ---@field private paths   table<integer, string>  the file of each anchor
 ---@field private per_file table<string, integer>  how many of each file's
 ---                        matches still have a line, for `stats.files`
+---@field private per_file_changes table<string, integer>  how many of each
+---                        file's counted changes there are, for
+---                        `stats.changed_files`
 local Tracker = {}
 Tracker.__index = Tracker
 
@@ -34,7 +38,8 @@ Tracker.__index = Tracker
 ---                                        by the tracker from here on
 ---@return greplace.Tracker
 function M.new(entries, drawn)
-    local stats, paths, per_file = { files = 0, lines = 0, changes = 0 }, {}, {}
+    local stats = { files = 0, lines = 0, changes = 0, changed_files = 0 }
+    local paths, per_file = {}, {}
     for id, entry in pairs(entries) do
         paths[id]  = entry.path
         stats.lines = stats.lines + 1
@@ -49,6 +54,7 @@ function M.new(entries, drawn)
         changed  = {},
         paths    = paths,
         per_file = per_file,
+        per_file_changes = {},
     }, Tracker)
 end
 
@@ -64,6 +70,23 @@ function Tracker:is_changed(id)
     return self.changed[id] == true
 end
 
+--- A counted change entered (`n` = 1) or left (`n` = -1) the count of the
+--- file of anchor `id`.
+---@param self greplace.Tracker
+---@param id   integer
+---@param n    integer
+local function count_change(self, id, n)
+    local stats = self.stats
+    stats.changes = stats.changes + n
+    local path = self.paths[id]
+    local left = (self.per_file_changes[path] or 0) + n
+    self.per_file_changes[path] = left
+    -- A file counts as changed while any of its counted matches is.
+    if left == (n > 0 and 1 or 0) then
+        stats.changed_files = stats.changed_files + n
+    end
+end
+
 --- A match's line was removed (`hide`), or came back.
 ---@param id   integer
 ---@param hide boolean
@@ -73,7 +96,7 @@ function Tracker:set_hidden(id, hide)
     local n     = hide and -1 or 1
     local stats = self.stats
     stats.lines = stats.lines + n
-    if self.changed[id] then stats.changes = stats.changes + n end
+    if self.changed[id] then count_change(self, id, n) end
     local path = self.paths[id]
     local left = (self.per_file[path] or 0) + n
     self.per_file[path] = left
@@ -91,7 +114,7 @@ function Tracker:set_changed(id, changed)
     if self:is_changed(id) == changed then return end
     self.changed[id] = changed or nil
     if not self:is_hidden(id) then
-        self.stats.changes = self.stats.changes + (changed and 1 or -1)
+        count_change(self, id, changed and 1 or -1)
     end
 end
 
@@ -105,7 +128,10 @@ end
 ---@return greplace.Stats
 function Tracker:snapshot()
     local s = self.stats
-    return { files = s.files, lines = s.lines, changes = s.changes }
+    return {
+        files = s.files, lines = s.lines, changes = s.changes,
+        changed_files = s.changed_files,
+    }
 end
 
 return M

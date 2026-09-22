@@ -439,22 +439,22 @@ describe("greplace", function()
         local bufnr = panel.open(run_search("hit"), {
             query = "hit", root = _root, height = 10, on_write = function() end,
         })
-        assert.same({ files = 2, lines = 3, changes = 0 }, panel.stats(bufnr))
+        assert.same({ files = 2, lines = 3, changes = 0, changed_files = 0 }, panel.stats(bufnr))
 
         -- An edited line is one change. The counts follow an edit once the
         -- deferred redraw has run.
         edit_row(bufnr, 0, { "HIT one" })
         vim.wait(100, function() return false end)
-        assert.same({ files = 2, lines = 3, changes = 1 }, panel.stats(bufnr))
+        assert.same({ files = 2, lines = 3, changes = 1, changed_files = 1 }, panel.stats(bufnr))
 
         edit_row(bufnr, 1, { "HIT two" })
         vim.wait(100, function() return false end)
-        assert.same({ files = 2, lines = 3, changes = 2 }, panel.stats(bufnr))
+        assert.same({ files = 2, lines = 3, changes = 2, changed_files = 1 }, panel.stats(bufnr))
 
         -- A removed line leaves every count, and takes its file with it when it
         -- was that file's last match.
         delete_row(bufnr, 2)
-        assert.same({ files = 1, lines = 2, changes = 2 }, panel.stats(bufnr))
+        assert.same({ files = 1, lines = 2, changes = 2, changed_files = 1 }, panel.stats(bufnr))
     end)
 
     it("draws the counts in the panel's winbar", function()
@@ -466,7 +466,7 @@ describe("greplace", function()
         end, 20))
 
         local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
-        assert.is_truthy(winbar:find("1 file  1 line  0 changes", 1, true))
+        assert.is_truthy(winbar:find("1 file (0 changed)  1 line (0 changed)", 1, true))
         assert.is_nil(winbar:find("hit", 1, true))
         assert.is_nil(winbar:find("open", 1, true))
     end)

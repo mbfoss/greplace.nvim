@@ -193,6 +193,9 @@ and nothing completes past the `--`.
 
   --max-depth <n>                     maximum directory depth to descend
 
+  --max-count <n>                     collect at most n matches, in place
+                                      of the configured limit
+
   --regex                             treat the query as a regex
 
   --case / --nocase                   case-sensitive / -insensitive

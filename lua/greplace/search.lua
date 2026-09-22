@@ -145,6 +145,18 @@ local function rg_base(opts)
     -- reaches the disk pass and not `rgflags.buffer_filter` (`--hidden`,
     -- `--glob`), or hands us a "line" with newlines in it (`--multiline`).
     local args = { "rg", "--no-config", "--json", "--no-heading" }
+    -- rg's `--max-count` is per file, and ours is over the whole search, so
+    -- this is not the limit itself -- `M.run` still counts and stops. It is
+    -- what keeps rg from decoding a million hits out of one huge file before
+    -- our count catches up: no file can hold back more of the limit than the
+    -- limit, so a file capped here can only lose matches that were never going
+    -- to be collected. Both passes carry it, and both may emit a full `limit`
+    -- of their own; whichever arrives first fills it. The buffer pass is one
+    -- stream to rg, so there the cap is over all the modified buffers at once
+    -- -- again no fewer matches than the limit can take.
+    if opts.limit then
+        vim.list_extend(args, { "--max-count", tostring(opts.limit) })
+    end
     -- Plain `:Greplace` is a literal, smart-case search and nothing else; a
     -- regex, a case rule or anything else is asked for through `:Gsearch`'s
     -- flags, which decide all of it themselves.
@@ -261,7 +273,8 @@ local function rg_json(cmd, root, real, stdin, sink, done)
         end
     end
 
-    local handle = spawn(cmd, {
+    local handle, start_err
+    handle, start_err = spawn(cmd, {
         cwd    = root,
         stdin  = stdin ~= nil,
         stdout = function(data) feed(data, false) end,
@@ -274,7 +287,8 @@ local function rg_json(cmd, root, real, stdin, sink, done)
         -- that found it), and letting that read as a clean exit would have the
         -- panel report "no matches" for a search that never ran.
         if code < 0 then
-            done(("could not run %s in %s"):format(cmd[1], root))
+            done(("could not run %s in %s: %s")
+                :format(cmd[1], root, start_err or "process did not start"))
         elseif code > 1 then
             local msg = vim.trim(table.concat(errbuf))
             done(msg ~= "" and msg or "rg failed")
