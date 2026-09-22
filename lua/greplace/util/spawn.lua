@@ -1,6 +1,7 @@
 ---@class greplace.util.SpawnHandle
 ---@field kill  fun()
 ---@field write fun(data: string?, on_done?: fun())
+---@field get_write_queue_size fun():integer
 
 ---@param cmd      string[]
 ---@param opts     { cwd?: string, env: {string:string}?, stdin?: boolean, stdout?: fun(data:string), stderr?: fun(data:string) }
@@ -55,8 +56,8 @@ local function spawn(cmd, opts, on_exit)
 
     local handle ---@type uv.uv_process_t?
     ---@diagnostic disable-next-line: missing-fields
-    local spawn_err ---@type string?
-    handle, spawn_err = vim.uv.spawn(cmd[1], {
+    local pid_or_err ---@type string|integer?
+    handle, pid_or_err = vim.uv.spawn(cmd[1], {
         args  = vim.list_slice(cmd, 2),
         cwd   = opts.cwd,
         env = env,
@@ -77,9 +78,10 @@ local function spawn(cmd, opts, on_exit)
     -- nil plus an error string rather than raising, so the error is handed back
     -- to the caller; on_exit still fires so pending work settles.
     if not handle then
+        ---@cast pid_or_err string
         close_pipes()
         vim.schedule(function() on_exit(-1) end)
-        return nil, spawn_err or "failed to spawn " .. tostring(cmd[1])
+        return nil, pid_or_err or ("failed to spawn " .. tostring(cmd[1]))
     end
 
     local out = assert(stdout)
@@ -136,6 +138,10 @@ local function spawn(cmd, opts, on_exit)
                 if on_done then on_done() end
             end)
         end,
+        get_write_queue_size = function ()
+            if not stdin then return 0 end
+            return stdin:get_write_queue_size()
+        end
     }
 end
 
