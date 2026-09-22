@@ -390,33 +390,7 @@ describe(":Gsearch / :Greplace", function()
         assert.is_truthy(err("--max-depth 2.9 -- hit"):match("whole number"))
         assert.is_truthy(require("greplace.rgflags")
             .parse({ "--max-depth", "2", "--", "hit" }).flags["max-depth"] == "2")
-
-        -- The same for the match limit, which is read as a number too, and
-        -- where zero would be a search that can report nothing.
-        assert.is_truthy(err("--max-count abc -- hit"):match("whole number"))
-        assert.is_truthy(err("--max-count 0 -- hit"):match("at least 1"))
-        assert.equals(25, rgflags.max_count(
-            assert(rgflags.parse({ "--max-count", "25", "--", "hit" })).flags))
     end)
-
-    it("collects only `--max-count` matches, whatever the configured limit",
-        function()
-            local lines = {}
-            for i = 1, 40 do lines[i] = "hit " .. i end
-            write_file("big.txt", lines)
-
-            local bufnr = assert(run("Gsearch --max-count 5 -- hit"))
-            assert.equals(5, #panel_lines(bufnr))
-            -- The note names the limit the search actually ran under, not the
-            -- configured one it stands in for.
-            local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
-            assert.is_truthy(winbar:find("limit of 5 reached", 1, true))
-
-            -- Without it the configured limit applies, and this search fits.
-            bufnr = assert(run("Gsearch hit"))
-            assert.equals(40, #panel_lines(bufnr))
-            assert.is_nil(vim.wo[vim.fn.bufwinid(bufnr)].winbar:find("limit", 1, true))
-        end)
 
     it("takes an escaped space in a plain `:Gsearch` query", function()
         write_file("a.txt", { "two words here" })

@@ -146,7 +146,6 @@ and nothing completes past the `--`.
 | `--iglob <glob>` | the same, matched regardless of case |
 | `--type <name>` | rg file type, repeatable: `lua`, `rust`, `!md` (see `rg --type-list`) |
 | `--max-depth <n>` | maximum directory depth to descend |
-| `--max-count <n>` | collect at most `n` matches, in place of the configured `limit` |
 | `--regex` | treat the query as a regex |
 | `--case` / `--nocase` | case-sensitive / -insensitive (default: smart case) |
 | `--word` / `--line` | match whole words / whole lines only |

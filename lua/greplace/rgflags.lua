@@ -90,7 +90,6 @@ M.FLAGS = {
     { name = "iglob",     arg = "glob", multi = true, desc = "the same, matched regardless of case" },
     { name = "type",      arg = "name", multi = true, complete = complete_type, desc = "rg file type, repeatable: lua, rust, !md (rg --type-list)" },
     { name = "max-depth", arg = "n", num = true, desc = "max directory depth to descend" },
-    { name = "max-count", arg = "n", num = true, desc = "stop after this many matches, over the configured limit" },
     { name = "regex",     desc = "treat the query as a regex" },
     { name = "case",      desc = "case-sensitive (default: smart case)" },
     { name = "nocase",    desc = "case-insensitive (default: smart case)" },
@@ -114,7 +113,6 @@ for _, def in ipairs(M.FLAGS) do _by_name[def.name] = def end
 ---@field iglob     string[]?
 ---@field type      string[]?
 ---@field max-depth string?
----@field max-count string?
 ---@field regex     boolean?
 ---@field case      boolean?
 ---@field nocase    boolean?
@@ -184,17 +182,6 @@ function M.file_args(flags)
     end
 
     return args
-end
-
---- The match limit this flag line asks for, for the caller to use in place of
---- the configured one. It is not an rg argument of either pass's own: the
---- search caps its own collection with it, and hands it to both passes (see
---- `greplace.search`).
----@param flags table
----@return integer?  nil when the line does not ask for one
-function M.max_count(flags)
-    local n = tonumber(flags["max-count"])
-    return n and math.floor(n) or nil
 end
 
 --- Compile a glob list, dropping any that fail to compile.
@@ -383,20 +370,14 @@ function M.parse(fargs)
 
     -- The flags whose value has to be a number, checked here because whoever
     -- reads them drops a value it cannot make sense of -- which would leave
-    -- the search running over the whole tree, or at the configured limit,
-    -- with nothing said, while every other malformed flag line is reported.
+    -- the search running over the whole tree with nothing said, while every
+    -- other malformed flag line is reported.
     for _, def in ipairs(M.FLAGS) do
         local value = def.num and flags[def.name]
         if value and not value:match("^%d+$") then
             return nil, ("--%s needs a whole number, not `%s`"):format(def.name, value)
         end
     end
-    -- Zero of them is no search at all, and rg reads `--max-count 0` as
-    -- exactly that: a run that reports nothing.
-    if flags["max-count"] == "0" then
-        return nil, "--max-count needs at least 1"
-    end
-
     return { flags = flags, query = query }
 end
 

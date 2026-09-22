@@ -19,10 +19,7 @@ end
 ---                          final message
 ---@param st        greplace.Stats?  the counts of a rendered list
 ---@param truncated boolean  the list is the first `limit` matches of more
----@param limit     integer?  the limit it stopped at (default: the configured
----                           one), which `--max-count` moves
-function M.set_winbar(bufnr, text, st, truncated, limit)
-    limit = limit or config.limit
+function M.set_winbar(bufnr, text, st, truncated)
     if not config.winbar then return end
 
     if not text then
@@ -37,8 +34,9 @@ function M.set_winbar(bufnr, text, st, truncated, limit)
     -- are removed from it, the counts no longer sit at the limit, and the note
     -- would only be noise; an undo that brings them back brings it back too.
     local note = ""
-    if truncated and (not st or st.lines >= limit) then
-        note = string.format("  %%#GreplaceLimit#limit of %d reached", limit)
+    if truncated and (not st or st.lines >= config.limit) then
+        note = string.format("  %%#GreplaceLimit#limit of %d reached",
+            config.limit)
     end
 
     -- `text` is not always the plugin's own words: a query the user typed and
