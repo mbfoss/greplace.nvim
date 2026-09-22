@@ -32,18 +32,6 @@ local function state_of(bufnr)
     return panel and panel.state
 end
 
-local _ns                = marks.ns
-local _ns_hl             = draw.ns_hl
-local clear_all          = draw.clear_all
-local is_hidden          = marks.is_hidden
-local redraw             = marks.redraw
-local set_anchor         = marks.set_anchor
-local standing_before    = marks.standing_before
-local restore_marks      = marks.restore_marks
-local guard_lines        = marks.guard_lines
-local undo_seq           = marks.undo_seq
-local set_status         = draw.set_status
-
 -- The panel is the only module that writes a `greplace.PanelState`. `render`
 -- hands back a list and a tracker, `marks.redraw` reports what changed on the
 -- lines, and both are taken into the state below (`render_list`,
@@ -160,7 +148,7 @@ end
 function M.entry_at(bufnr, row)
     local state = state_of(bufnr)
     if not state then return end
-    local mark = standing_before(bufnr, row, -1)
+    local mark = marks.standing_before(bufnr, row, -1)
     if not mark then return end
     return state.list.entries[mark[1]], mark[2]
 end
@@ -262,12 +250,12 @@ local function goto_change(bufnr, dir)
     local left, target
     while true do
         left, target = vim.v.count1, nil
-        local marks = vim.api.nvim_buf_get_extmarks(bufnr, _ns, from, to,
+        local found = vim.api.nvim_buf_get_extmarks(bufnr, marks.ns, from, to,
             { details = true, limit = limit })
-        for _, mark in ipairs(marks) do
+        for _, mark in ipairs(found) do
             -- A removed match keeps its changed flag but no row: its anchor is
             -- stranded on whichever line is next.
-            if state.tracker:is_changed(mark[1]) and not is_hidden(mark) and mark[2] ~= target then
+            if state.tracker:is_changed(mark[1]) and not marks.is_hidden(mark) and mark[2] ~= target then
                 target = mark[2]
                 left   = left - 1
                 -- The rest of the walk is what a count asked for; the edits
@@ -275,7 +263,7 @@ local function goto_change(bufnr, dir)
                 if left == 0 then break end
             end
         end
-        if left == 0 or #marks < limit then break end
+        if left == 0 or #found < limit then break end
         limit = limit * 2
     end
     if not target then
@@ -308,14 +296,14 @@ end
 local function redraw_marks(bufnr, state, lo, hi)
     local tracker = state.tracker
     if not tracker then return end
-    for _, move in ipairs(redraw(bufnr, state.list.entries, tracker, lo, hi)) do
+    for _, move in ipairs(marks._redraw(bufnr, state.list.entries, tracker, lo, hi)) do
         if move.hidden ~= nil then
             tracker:set_hidden(move.id, move.hidden)
         end
         if move.changed ~= nil then
             tracker:set_changed(move.id, move.changed)
             tracker:set_drawn(move.id, draw.with_marker(tracker.drawn[move.id], move.changed))
-            set_anchor(bufnr, move.id, move.row, tracker.drawn[move.id])
+            marks.set_anchor(bufnr, move.id, move.row, tracker.drawn[move.id])
         end
     end
 end
@@ -406,18 +394,18 @@ local function new_watcher(bufnr)
                     -- the undo tree holds was put in shape when it was made,
                     -- so a replay needs no line touched -- only the marks put
                     -- back onto the lines they were dragged off.
-                    local seq, seq_last = undo_seq(bufnr)
+                    local seq, seq_last = marks.undo_seq(bufnr)
                     local repaired      = false
                     if st.tracker and seq_last == seen_last and seq ~= seen_seq then
                         repairs = 0
-                        restore_marks(bufnr, st.list, st.tracker.drawn, lo, hi)
+                        marks.restore_marks(bufnr, st.list, st.tracker.drawn, lo, hi)
                         -- A repair is a change of its own, which gets a pass of
                         -- its own -- and that pass finds nothing left to repair.
                         -- More than a handful in a row means one is making work
                         -- for the next, and the panel stops rather than rewriting
                         -- the buffer under the user's hands forever.
                     elseif repairs < 8 and st.tracker
-                        and guard_lines(bufnr, st.list, st.tracker.drawn, lo, hi) then
+                        and marks.guard_lines(bufnr, st.list, st.tracker.drawn, lo, hi) then
                         repairs  = repairs + 1
                         repaired = true
                     else
@@ -425,7 +413,7 @@ local function new_watcher(bufnr)
                     end
                     -- Only a repair rewrites text, so only then can the undo
                     -- state have moved since it was read above.
-                    if repaired then seq, seq_last = undo_seq(bufnr) end
+                    if repaired then seq, seq_last = marks.undo_seq(bufnr) end
                     seen_seq, seen_last = seq, seq_last
                     redraw_marks(bufnr, st, lo, hi)
                     if st.tracker then set_winbar(bufnr, st) end
@@ -440,7 +428,7 @@ local function new_watcher(bufnr)
         pending = nil
         ticks   = 0
         repairs = 0
-        seen_seq, seen_last = undo_seq(bufnr)
+        seen_seq, seen_last = marks.undo_seq(bufnr)
     end
 
     function w.ticks(clear)
@@ -578,7 +566,7 @@ local function create_buf(on_write, on_delete)
                 return
             end
             _panels[bufnr].state = nil
-            clear_all(bufnr)
+            draw.clear_all(bufnr)
             vim.bo[bufnr].modifiable = true
             for _, win in ipairs(vim.api.nvim_list_wins()) do
                 if vim.api.nvim_win_get_buf(win) == bufnr then
@@ -731,7 +719,7 @@ end
 ---@param hl    string?
 local function show_message(bufnr, state, msg, hl)
     state.message = msg
-    set_status(bufnr, { { msg, hl or "GreplaceStatus" } })
+    draw.set_status(bufnr, { { msg, hl or "GreplaceStatus" } })
     set_winbar(bufnr, state, msg)
 end
 
@@ -770,7 +758,7 @@ function M.open_loading(opts)
     panel_of(bufnr).state = new_state(opts)
     show(bufnr, opts.height)
     set_winbar(bufnr, state_of(bufnr), "searching ...")
-    set_status(bufnr, {
+    draw.set_status(bufnr, {
         { "searching for ", "GreplaceStatus" },
         { opts.query,       "GreplaceMatch" },
         { " ...",           "GreplaceStatus" },
@@ -865,7 +853,7 @@ function M.settle(bufnr, regions)
     state.list = { entries = entries, order = state.list.order, index = state.list.index }
     -- The highlighted query hits belong to the text as searched, not to what
     -- has been written over it since.
-    vim.api.nvim_buf_clear_namespace(bufnr, _ns_hl, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, draw.ns_hl, 0, -1)
     redraw_marks(bufnr, state, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1))
     vim.bo[bufnr].modified = false
     set_winbar(bufnr, state)
@@ -882,7 +870,7 @@ function M.regions(bufnr)
     if not state then return {} end
 
     local total       = vim.api.nvim_buf_line_count(bufnr)
-    local marks       = vim.api.nvim_buf_get_extmarks(bufnr, _ns, 0, -1, { details = true })
+    local found       = vim.api.nvim_buf_get_extmarks(bufnr, marks.ns, 0, -1, { details = true })
     local out         = {}
 
     -- One pass over the standing anchors, which come back sorted by row: each
@@ -890,8 +878,8 @@ function M.regions(bufnr)
     -- the end of the buffer. A removed match's anchor is invalid, takes no
     -- row and gives up no lines.
     local lines, prev = {}, nil
-    for _, mark in ipairs(marks) do
-        if not is_hidden(mark) then
+    for _, mark in ipairs(found) do
+        if not marks.is_hidden(mark) then
             if prev then
                 lines[prev[1]] = vim.api.nvim_buf_get_lines(bufnr, prev[2], mark[2], false)
             end

@@ -11,16 +11,17 @@ local set_bounds    = marks.set_bounds
 
 local _ns          = marks.ns
 local _ns_bounds   = marks.ns_bounds
-local _ns_hl       = vim.api.nvim_create_namespace("greplace.match")
-local _ns_st       = vim.api.nvim_create_namespace("greplace.status")
 
 local M = {}
+
+M.ns_hl      = vim.api.nvim_create_namespace("greplace.match")
+local _ns_st = vim.api.nvim_create_namespace("greplace.status")
 
 --- Take everything the panel drew off a buffer: anchors, bounds, match
 --- highlights and the status text.
 ---@param bufnr integer
-local function clear_all(bufnr)
-    for _, ns in ipairs({ _ns, _ns_bounds, _ns_hl, _ns_st }) do
+function M.clear_all(bufnr)
+    for _, ns in ipairs({ _ns, _ns_bounds, M.ns_hl, _ns_st }) do
         vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
     end
 end
@@ -44,7 +45,7 @@ local _no_marker        = string.rep(" ", vim.fn.strdisplaywidth(_changed_marker
 ---@param chunks  table[]
 ---@param changed boolean
 ---@return table[]
-local function with_marker(chunks, changed)
+function M.with_marker(chunks, changed)
     local out = {}
     for i, chunk in ipairs(chunks) do out[i] = chunk end
     -- The marker is the chunk just before the `│`, the last one.
@@ -93,12 +94,12 @@ end
 ---@param matches greplace.Match[]
 ---@return greplace.List list
 ---@return greplace.Tracker tracker
-local function render(bufnr, matches)
+function M.render(bufnr, matches)
     local lines = {}
     for i, m in ipairs(matches) do lines[i] = m.text end
 
     vim.bo[bufnr].modifiable = true
-    clear_all(bufnr)
+    M.clear_all(bufnr)
     set_lines_no_undo(bufnr, lines)
 
     local width   = location_width(matches)
@@ -164,7 +165,7 @@ local function render(bufnr, matches)
             local e = math.max(s, math.min(sm.e, len))
             if e > s then
                 local hl_ok, hl_err = pcall(vim.api.nvim_buf_set_extmark,
-                    bufnr, _ns_hl, row - 1, s, {
+                    bufnr, M.ns_hl, row - 1, s, {
                         end_col  = e,
                         hl_group = "GreplaceMatch",
                     })
@@ -185,10 +186,10 @@ end
 --- never be mistaken for a result line to edit.
 ---@param bufnr integer
 ---@param chunks table[]  virtual text chunks, as `nvim_buf_set_extmark`
-local function set_status(bufnr, chunks)
+function M.set_status(bufnr, chunks)
     if not vim.api.nvim_buf_is_valid(bufnr) then return end
     vim.bo[bufnr].modifiable = true
-    clear_all(bufnr)
+    M.clear_all(bufnr)
     set_lines_no_undo(bufnr, { "" })
     vim.api.nvim_buf_set_extmark(bufnr, _ns_st, 0, 0, {
         virt_text     = chunks,
@@ -197,11 +198,5 @@ local function set_status(bufnr, chunks)
     vim.bo[bufnr].modified   = false
     vim.bo[bufnr].modifiable = false
 end
-
-M.ns_hl = _ns_hl
-M.with_marker = with_marker
-M.clear_all = clear_all
-M.render = render
-M.set_status = set_status
 
 return M
