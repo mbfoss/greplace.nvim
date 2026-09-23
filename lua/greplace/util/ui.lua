@@ -101,31 +101,34 @@ function M.smart_open_file(filepath, line, col, activate)
     if line and line < 1 then line = nil end
     if col and col < 0 then col = nil end
     if not filepath or filepath == "" then return -1, -1 end
-    local full_path = vim.fn.resolve(filepath)
 
-    -- Don't conjure an empty buffer for a path with neither a live buffer nor a
-    -- file on disk. (bufadd() would happily create a phantom entry for a
-    -- nonexistent file, so we still need this exact-match precheck.) The buffer
-    -- list scan only runs for paths missing from disk, which is the rare case.
-    if vim.fn.filereadable(full_path) == 0 then
-        local pattern = '^' .. vim.fn.escape(full_path, '\\[]*?~$.') .. '$'
-        if vim.fn.bufnr(pattern) == -1 then
-            return -1, -1
-        end
+    -- Absolute + symlink-resolved: bufadd() expands relative paths against the
+    -- cwd, so an un-absolutized name can resolve to a different buffer.
+    local full_path = vim.fn.resolve(vim.fn.fnamemodify(filepath, ":p"))
+
+    -- Exact-path lookup/create, no glob or fuzzy fallback. bufadd() only makes
+    -- the (unloaded) entry; `:buffer` below does the reading.
+    local bufnr = vim.fn.bufadd(full_path)
+    if bufnr == 0 then
+        return -1, -1
     end
 
-    -- Reuse a window already showing this file.
+    -- Already in the current window: nothing to switch to.
+    local cur_win = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_get_buf(cur_win) == bufnr then
+        _safe_set_cursor_pos(cur_win, line, col)
+        return cur_win, bufnr
+    end
+
+    -- Reuse another window already showing this buffer.
     local tabpage = vim.api.nvim_get_current_tabpage()
-    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
-        if _is_regular_win(winid) then
-            local bufnr = vim.api.nvim_win_get_buf(winid)
-            if vim.api.nvim_buf_get_name(bufnr) == full_path then
-                if activate ~= false then
-                    vim.api.nvim_set_current_win(winid)
-                end
-                _safe_set_cursor_pos(winid, line, col)
-                return winid, bufnr
+    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+        if vim.api.nvim_win_get_tabpage(winid) == tabpage and _is_regular_win(winid) then
+            if activate ~= false then
+                vim.api.nvim_set_current_win(winid)
             end
+            _safe_set_cursor_pos(winid, line, col)
+            return winid, bufnr
         end
     end
 
@@ -133,10 +136,6 @@ function M.smart_open_file(filepath, line, col, activate)
     if activate ~= false then
         vim.api.nvim_set_current_win(winid)
     end
-
-    -- Exact-path lookup/create, no glob or fuzzy fallback. bufadd() only makes
-    -- the (unloaded) entry; `:buffer` below does the reading.
-    local bufnr = vim.fn.bufadd(full_path)
 
     -- pcall is required here: the load can abort for reasons the caller cannot
     -- check for up front -- an existing swap file the user answers "quit" to, an
