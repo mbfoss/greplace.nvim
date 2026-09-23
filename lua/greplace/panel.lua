@@ -194,10 +194,6 @@ local function hover(bufnr)
         "- relative: `" .. entry.relpath .. "`",
         "- line: `" .. entry.lnum .. "`",
         "- buffer: " .. (loaded and ("`" .. loaded .. "` (loaded)") or "not loaded"),
-        "",
-        "```",
-        entry.text,
-        "```",
     }
     vim.lsp.util.open_floating_preview(lines, "markdown", {
         border   = "rounded",
