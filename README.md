@@ -275,8 +275,4 @@ warning, since `setup()` would otherwise accept a misspelling in silence.
 
 [MIT](LICENSE).
 
-## Development <!-- tag: development -->
-
-Internals, tests and conventions: [DEVELOPMENT.md](DEVELOPMENT.md).
-
 <!-- panvimdoc-ignore-end -->
