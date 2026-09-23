@@ -13,7 +13,7 @@ Table of Contents                                 *greplace-table-of-contents*
   - Editing rules                                           |greplace-editing|
 3. Configuration                                      |greplace-configuration|
 4. Health                                                    |greplace-health|
-5. Highlight groups                                      |greplace-highlights|
+5. Highlights                                            |greplace-highlights|
 
   WORK IN PROGRESS
 Project-wide search and replace by editing the grep results.
@@ -40,8 +40,8 @@ the change is one `:wa` away, or one `u` per buffer from being undone. `u` in
 the panel undoes the write there too, and writing again reverts the source.
 
 
-  **Requires Neovim ≥ 0.11** and ripgrep
-  <https://github.com/BurntSushi/ripgrep> on `$PATH`. No plugin dependencies.
+  **Requires Neovim >= 0.11** and ripgrep <https://github.com/BurntSushi/ripgrep>
+  on `$PATH`. No plugin dependencies.
 
 ==============================================================================
 1. Installation                                        *greplace-installation*
@@ -333,7 +333,7 @@ warning, since `setup()` would otherwise accept a misspelling in silence.
 
 
 ==============================================================================
-5. Highlight groups                                      *greplace-highlights*
+5. Highlights                                            *greplace-highlights*
 
   -------------------------------------------------------------------------
   Group                     Default                 Meaning

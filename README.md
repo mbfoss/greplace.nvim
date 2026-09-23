@@ -31,7 +31,7 @@ their buffer, other files are loaded into one. Nothing is written to disk, so
 the change is one `:wa` away, or one `u` per buffer from being undone. `u` in
 the panel undoes the write there too, and writing again reverts the source.
 
-> **Requires Neovim ≥ 0.11** and [ripgrep](https://github.com/BurntSushi/ripgrep)
+> **Requires Neovim >= 0.11** and [ripgrep](https://github.com/BurntSushi/ripgrep)
 > on `$PATH`. No plugin dependencies.
 
 ## Installation
@@ -257,7 +257,7 @@ Reports ripgrep, the commands and the options that differ from the defaults. A
 missing ripgrep is an error; an option name greplace does not define is a
 warning, since `setup()` would otherwise accept a misspelling in silence.
 
-## Highlight groups <!-- tag: highlights -->
+## Highlights <!-- tag: highlights -->
 
 | Group | Default | Meaning |
 | --- | --- | --- |
@@ -271,8 +271,12 @@ warning, since `setup()` would otherwise accept a misspelling in silence.
 
 <!-- panvimdoc-ignore-start -->
 
-## License
+## License <!-- tag: license -->
 
-MIT
+[MIT](LICENSE).
+
+## Development <!-- tag: development -->
+
+Internals, tests and conventions: [DEVELOPMENT.md](DEVELOPMENT.md).
 
 <!-- panvimdoc-ignore-end -->
