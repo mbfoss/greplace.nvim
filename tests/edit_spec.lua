@@ -54,6 +54,42 @@ function Child:open(texts)
     ]], texts)
 end
 
+--- Open a panel on `texts` with `hits[i]`, the `{ from, to }` (0-indexed) the
+--- query was found at on line `i`, drawn as a search's submatches would be.
+---@param hits table<integer, integer[]>
+---@return integer bufnr  in the child
+function Child:open_hits(texts, hits)
+    return self:lua([[
+        local texts, hits = ...
+        local matches = {}
+        for i, text in ipairs(texts) do
+            local subs = {}
+            if hits[i] then subs[1] = { s = hits[i][1], e = hits[i][2] } end
+            matches[i] = { path = "/x/a.txt", relpath = "a.txt", lnum = i, text = text, subs = subs }
+        end
+        return require("greplace.panel").open(matches, {
+            query = "q", root = "/x", height = 10, on_write = function() end,
+        })
+    ]], texts, hits)
+end
+
+--- What the panel highlights, as `row,from..to` per `GreplaceMatch` extmark in
+--- buffer order. A mark collapsed onto nothing paints nothing, so it is not a
+--- highlight and is left out.
+---@return string[]
+function Child:hits()
+    return self:lua([[
+        local ns  = vim.api.nvim_get_namespaces()["greplace.match"]
+        local out = {}
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, { details = true })) do
+            if m[4].end_col > m[3] then
+                out[#out + 1] = ("%d,%d..%d"):format(m[2], m[3], m[4].end_col)
+            end
+        end
+        return out
+    ]])
+end
+
 --- Type `keys`, then give the child's main loop a moment to run the autocmds
 --- and scheduled redraws they set off.
 ---@param keys string
@@ -156,6 +192,41 @@ describe("panel editing", function()
         -- about what it held.
         assert.same({ "ab", "cd" }, child:lines())
         assert.same({ "0,0 a.txt:1", "1,0 a.txt:2" }, child:anchors())
+    end)
+
+    it("takes the highlight of a hit off with the text it was found in", function()
+        child:open_hits({ "hit one", "hit two" }, { { 0, 3 }, { 0, 3 } })
+        assert.same({ "0,0..3", "1,0..3" }, child:hits())
+
+        -- Typing in front of a hit moves it along with the text under it.
+        child:feed("ggIthe <Esc>")
+        assert.same({ "0,4..7", "1,0..3" }, child:hits())
+
+        -- Typing over the matched text takes its highlight with it, leaving
+        -- the hit on the line that was not touched.
+        child:feed("ggwcwHIT<Esc>")
+        assert.same({ "1,0..3" }, child:hits())
+    end)
+
+    it("draws the highlight again when the searched text is undone back", function()
+        child:open_hits({ "hit one" }, { { 0, 3 } })
+        child:feed("ggcwHIT<Esc>")
+        assert.same({}, child:hits())
+
+        -- Undone, the line is the one the search found, and the hit is
+        -- drawn where it found it.
+        child:feed("u")
+        assert.same({ "0,0..3" }, child:hits())
+    end)
+
+    it("takes the highlight of a deleted match off and draws it back on undo", function()
+        child:open_hits({ "hit one", "hit two" }, { { 0, 3 }, { 0, 3 } })
+        child:feed("ggdd")
+        -- The line is gone, and its hit with it; the match below has taken the
+        -- row, and its own hit has moved up with it.
+        assert.same({ "0,0..3" }, child:hits())
+        child:feed("u")
+        assert.same({ "0,0..3", "1,0..3" }, child:hits())
     end)
 
     it("puts a line broken in Insert mode back together", function()

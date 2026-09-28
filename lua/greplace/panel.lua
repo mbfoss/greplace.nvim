@@ -43,6 +43,8 @@ end
 ---@field relpath string
 ---@field lnum    integer  1-indexed line in the source file
 ---@field text    string   the source line as it was when the panel rendered
+---@field hits    greplace.Hit[]?  where the query hit the line, as rendered;
+---                        dropped once it has been written over
 
 ---State of the one panel buffer: the anchor extmark id of each match, and the
 ---query it was built from. Written by this module alone; the others read it.
@@ -302,6 +304,9 @@ local function redraw_marks(bufnr, state, lo, hi)
             marks.set_anchor(bufnr, move.id, move.row, tracker.drawn[move.id])
         end
     end
+    -- The hits of these rows belong to the text as searched: they go with
+    -- whatever the edit did to it, or come back with it.
+    draw.recheck_hits(bufnr, state.list.entries, lo, hi)
 end
 
 ---@class greplace.Watcher
@@ -793,7 +798,9 @@ function M.refresh(bufnr, entries)
             relpath = e.relpath,
             lnum    = e.lnum,
             text    = e.text,
-            subs    = {},
+            -- A refresh redraws the lines as they were searched -- what
+            -- `:edit` refills the panel from -- so the hits still stand.
+            subs    = e.hits or {},
             bufnr   = bufs[e.path],
         }
     end
@@ -838,6 +845,9 @@ function M.settle(bufnr, regions)
     for _, region in ipairs(regions) do
         local e = region.entry
         if entries[region.id] then
+            -- No `hits`: the line has been written over, so the query no
+            -- longer hits the text the panel holds. A match the write left
+            -- alone keeps its own, and keeps its highlight.
             entries[region.id] = {
                 path    = e.path,
                 relpath = e.relpath,
@@ -848,7 +858,8 @@ function M.settle(bufnr, regions)
     end
     state.list = { entries = entries, order = state.list.order, index = state.list.index }
     -- The highlighted query hits belong to the text as searched, not to what
-    -- has been written over it since.
+    -- has been written over it since. Cleared here rather than left to the
+    -- redraw below, which draws only the entries that still hold their hits.
     vim.api.nvim_buf_clear_namespace(bufnr, draw.ns_hl, 0, -1)
     redraw_marks(bufnr, state, 0, math.max(0, vim.api.nvim_buf_line_count(bufnr) - 1))
     vim.bo[bufnr].modified = false

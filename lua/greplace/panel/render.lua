@@ -17,6 +17,13 @@ local M = {}
 M.ns_hl      = vim.api.nvim_create_namespace("greplace.match")
 local _ns_st = vim.api.nvim_create_namespace("greplace.status")
 
+--- One occurrence of the query in a match's line, as the search found it: the
+--- columns it covers and, once drawn, the extmark painting it.
+---@class greplace.Hit
+---@field s  integer  0-indexed first byte
+---@field e  integer  0-indexed end, exclusive
+---@field id integer?  the `GreplaceMatch` extmark, while one is drawn
+
 --- Take everything the panel drew off a buffer: anchors, bounds, match
 --- highlights and the status text.
 ---@param bufnr integer
@@ -86,6 +93,110 @@ local function set_lines_no_undo(bufnr, lines)
     if not ok then error(err) end
 end
 
+--- Paint the hits of one row and record the extmark each was given, for a
+--- later pass to read the text under it back.
+---@param bufnr integer
+---@param row   integer  0-indexed
+---@param hits  greplace.Hit[]
+function M.draw_hits(bufnr, row, hits)
+    for _, h in ipairs(hits) do
+        -- The recorded id, when there is one: the redraw lands on the mark
+        -- already drawing the hit rather than leaving it behind on the row.
+        local ok, id = pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_hl, row, h.s, {
+            id       = h.id,
+            end_col  = h.e,
+            hl_group = "GreplaceMatch",
+        })
+        if not ok then
+            error(string.format("could not highlight match at %d-%d: %s",
+                h.s, h.e, tostring(id)), 0)
+        end
+        h.id = id
+    end
+end
+
+--- Take one hit's extmark off the buffer, leaving the id on the hit for a
+--- redraw to put back where the search found it.
+---@param bufnr integer
+---@param id    integer?
+local function drop_hit(bufnr, id)
+    if id then pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns_hl, id) end
+end
+
+--- Where a hit's mark stands: the row and columns it covers, nil when it is
+--- not drawn.
+---@param bufnr integer
+---@param h     greplace.Hit
+---@return integer? row, integer? s, integer? e
+local function hit_at(bufnr, h)
+    local at      = h.id and vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns_hl, h.id,
+        { details = true }) or {}
+    return at[1], at[2], at[3] and at[3].end_col
+end
+
+--- Whether a hit's mark is drawn where the search found it.
+---@param bufnr integer
+---@param row   integer
+---@param h     greplace.Hit
+---@return boolean
+local function hit_drawn(bufnr, row, h)
+    local r, s, e = hit_at(bufnr, h)
+    return r == row and s == h.s and e == h.e
+end
+
+--- Keep the `GreplaceMatch` highlights of rows `lo`..`hi` true to the lines
+--- under them. A hit belongs to the text as searched: a line that is that text
+--- has its hits again -- which is what an undo puts back -- while on an edited
+--- line a hit stands only where the bytes under it are still the ones that
+--- were matched.
+---@param bufnr   integer
+---@param entries table<integer, greplace.Entry>  keyed by anchor extmark id
+---@param lo      integer  0-indexed
+---@param hi      integer  0-indexed, inclusive
+function M.recheck_hits(bufnr, entries, lo, hi)
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, _ns,
+        { lo, 0 }, { hi, -1 }, { details = true })) do
+        ---@type greplace.Entry?
+        local entry = entries[mark[1]]
+        if entry and entry.hits and #entry.hits > 0 then
+            local hits = assert(entry.hits)
+            if marks.is_hidden(mark) then
+                -- The line is gone, so its hits are not drawn. Their marks
+                -- survive collapsed onto the row that took the line's place,
+                -- ready for the undo to draw again; one the text shoved onto
+                -- something else is taken off.
+                for _, h in ipairs(hits) do
+                    local r, s, e = hit_at(bufnr, h)
+                    if r and e and e > s then drop_hit(bufnr, h.id) end
+                end
+            else
+                local row  = mark[2]
+                local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
+                if text == entry.text then
+                    -- Only what is not already right: this runs behind every
+                    -- change, and moving a mark that stands where it should is
+                    -- churn for nothing.
+                    local missing = {}
+                    for _, h in ipairs(hits) do
+                        if not hit_drawn(bufnr, row, h) then missing[#missing + 1] = h end
+                    end
+                    if #missing > 0 then M.draw_hits(bufnr, row, missing) end
+                else
+                    for _, h in ipairs(hits) do
+                        local r, s, e = hit_at(bufnr, h)
+                        -- Kept only while the bytes under the mark are still
+                        -- the bytes that were matched.
+                        if r ~= row or not s or not e or e <= s
+                            or text:sub(s + 1, e) ~= entry.text:sub(h.s + 1, h.e) then
+                            drop_hit(bufnr, h.id)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 --- Write the match list into the panel buffer and (re)anchor one extmark per
 --- match. Nothing is recorded anywhere but in what is returned, which the
 --- caller takes as the panel's list: a render that fails leaves no half of one
@@ -148,33 +259,30 @@ function M.render(bufnr, matches)
         set_bounds(bufnr, id, row - 1, #m.text)
         drawn[id]   = virt
         order[row]  = id
+        -- Both ends are clamped, not just the end one: a match span can start
+        -- past the line we kept (rg counts the line terminator it stripped,
+        -- and a `$`-anchored pattern lands there), and an out-of-range start
+        -- column is an error, not a no-op.
+        local len  = #m.text
+        local hits = {}
+        for _, sm in ipairs(m.subs) do
+            local s = math.max(0, math.min(sm.s, len))
+            local e = math.max(s, math.min(sm.e, len))
+            if e > s then hits[#hits + 1] = { s = s, e = e } end
+        end
+        local hl_ok, hl_err = pcall(M.draw_hits, bufnr, row - 1, hits)
+        if not hl_ok then
+            error(string.format("%s:%d: %s", m.relpath, m.lnum, tostring(hl_err)), 0)
+        end
+
         index[id]   = row
         entries[id] = {
             path    = m.path,
             relpath = m.relpath,
             lnum    = m.lnum,
             text    = m.text,
+            hits    = hits,
         }
-        -- Both ends are clamped, not just the end one: a match span can start
-        -- past the line we kept (rg counts the line terminator it stripped,
-        -- and a `$`-anchored pattern lands there), and an out-of-range start
-        -- column is an error, not a no-op.
-        local len = #m.text
-        for _, sm in ipairs(m.subs) do
-            local s = math.max(0, math.min(sm.s, len))
-            local e = math.max(s, math.min(sm.e, len))
-            if e > s then
-                local hl_ok, hl_err = pcall(vim.api.nvim_buf_set_extmark,
-                    bufnr, M.ns_hl, row - 1, s, {
-                        end_col  = e,
-                        hl_group = "GreplaceMatch",
-                    })
-                if not hl_ok then
-                    error(string.format("%s:%d: could not highlight match at %d-%d: %s",
-                        m.relpath, m.lnum, s, e, tostring(hl_err)), 0)
-                end
-            end
-        end
     end
 
     vim.bo[bufnr].modified = false
