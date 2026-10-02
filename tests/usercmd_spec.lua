@@ -54,24 +54,6 @@ local function panel_lines(bufnr)
 end
 
 describe("greplace.util.usercmd", function()
-    it("hands Neovim's own split of the arguments to the body", function()
-        local seen
-        usercmd.handle({ name = "Greplace", fargs = { "search", "one", "two" } },
-            function(_, args) seen = args end)
-        assert.are.same({ "search", "one", "two" }, seen)
-    end)
-
-    it("reports an error from the command body as a notification", function()
-        local notified
-        local orig = vim.notify
-        vim.notify = function(msg) notified = msg end
-        local ok = pcall(usercmd.handle, { name = "Greplace", args = "search x" },
-            function() error("boom") end)
-        vim.notify = orig
-        assert.is_true(ok)
-        assert.is_truthy(notified and notified:match("boom"))
-    end)
-
     it("completes the subcommand, then defers to the subcommand", function()
         local subs = usercmd.complete("", "Gsearch ", function(_, rest)
             return #rest == 0 and { "search", "refresh" } or { "inner" }

@@ -4,23 +4,29 @@ if vim.fn.has("nvim-0.11") ~= 1 then
 end
 
 -- The two commands are registered here at startup without requiring any Lua:
--- the callbacks pull in what they need on first use. `util/usercmd` is the
--- command plumbing -- it reports an error from a command body as a
--- notification rather than a stack trace -- and `greplace` is the plugin
--- proper, the search, the panel and the write-back. Neither is read until a
--- command is first run. Both modules are cached in a local on first use, so a
--- callback pays for a `require` lookup once rather than on every invocation.
+-- the callbacks pull in what they need on first use. `greplace` is the plugin
+-- proper, the search, the panel and the write-back, and `util/usercmd` is the
+-- completion plumbing behind `:Greplace`. Neither is read until a command is
+-- first run, and both are cached in a local on first use, so a callback pays
+-- for a `require` lookup once rather than on every invocation. Each body runs
+-- its work under `pcall`, so an error in it is reported as a notification
+-- rather than as a stack trace.
 local usercmd ---@type table?
 local greplace ---@type table?
 
 -- `:Gsearch` is the one that searches: a query taken literally, or -- when the
 -- line opens with `--` -- a flag line, `--glob *.lua --hidden -- query`.
 vim.api.nvim_create_user_command("Gsearch", function(opts)
-    usercmd = usercmd or require("greplace.util.usercmd")
-    usercmd.handle(opts, function(cmd, args, cmd_opts)
-        greplace = greplace or require("greplace")
-        return greplace.run_search(cmd, args, cmd_opts)
-    end)
+    greplace = greplace or require("greplace")
+    -- nargs="*" always yields fargs; the fallback is only to satisfy its
+    -- optional type.
+    local ok, err = pcall(greplace.run_search, opts.name, opts.fargs or {}, opts)
+    if not ok then
+        vim.notify(
+            "[greplace.nvim] " .. opts.name .. " command error\n" .. tostring(err),
+            vim.log.levels.ERROR
+        )
+    end
 end, {
     desc     = "Grep the working tree into an editable buffer (--flags -- query)",
     -- `nargs = "*"` rather than `"?"`: a query is one string that may well
@@ -39,11 +45,16 @@ end, {
 -- screen, take it off again, or fill it from the quickfix list instead --
 -- `:grep`, `:vimgrep`, an LSP's references, anything that fills that list.
 vim.api.nvim_create_user_command("Greplace", function(opts)
-    usercmd = usercmd or require("greplace.util.usercmd")
-    usercmd.handle(opts, function(cmd, args, cmd_opts)
-        greplace = greplace or require("greplace")
-        return greplace.run(cmd, args, cmd_opts)
-    end)
+    greplace = greplace or require("greplace")
+    -- As above: `nargs="*"` always yields fargs, and a body that throws is
+    -- reported rather than left as a stack trace.
+    local ok, err = pcall(greplace.run, opts.name, opts.fargs or {}, opts)
+    if not ok then
+        vim.notify(
+            "[greplace.nvim] " .. opts.name .. " command error\n" .. tostring(err),
+            vim.log.levels.ERROR
+        )
+    end
 end, {
     desc     = "The greplace panel: open, toggle, refresh, diff, or fill from the quickfix list",
     -- `nargs = "*"` rather than `"?"`: a second word is reported by the body

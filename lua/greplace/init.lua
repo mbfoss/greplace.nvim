@@ -345,10 +345,9 @@ local function open_flag_line(fargs)
     })
 end
 
---- `:Gsearch`'s implementation, as a `greplace.usercmd.run_fn` body. Exposed
---- so that `plugin/greplace.lua` can register the command without this module
---- being loaded: it hands `util/usercmd` a wrapper that requires us on the
---- first invocation.
+--- `:Gsearch`'s implementation. Exposed so that `plugin/greplace.lua` can
+--- register the command without this module being loaded: the command body
+--- requires us on its first invocation.
 ---
 --- A line that opens with `--` is a flag line, read by `greplace.rgflags`;
 --- anything else is the query itself, taken literally. Either way the words

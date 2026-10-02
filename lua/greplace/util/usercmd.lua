@@ -18,9 +18,6 @@ local M = {}
 --
 ---@alias greplace.usercmd.subcommand fun(cmd:string,rest:string[],arg_lead:string):string[]
 
----@alias greplace.usercmd.run_fn
----| fun(cmd:string,args:string[],opts:vim.api.keyset.create_user_command.command_args)
-
 
 --- Completion for a command registered with `nargs = "*"`, to be called from
 --- inside the `complete` callback so that this module -- and whatever
@@ -54,25 +51,6 @@ function M.complete(arg_lead, cmd_line, subcommand)
     end
 
     return filter(subcommand(parsed.cmd, rest, arg_lead))
-end
-
---- Body of a command registered with `nargs = "*"`: hands Neovim's `fargs` to
---- `run_fn`, reporting any error it raises as a notification rather than as a
---- stack trace. Called from inside the command callback, so nothing here is
---- loaded until the command is first run.
----@param opts vim.api.keyset.create_user_command.command_args
----@param run_fn greplace.usercmd.run_fn
-function M.handle(opts, run_fn)
-    local cmd = opts.name
-    -- nargs="*" always yields fargs; the fallback is only to satisfy its
-    -- optional type.
-    local ok, err = pcall(run_fn, cmd, opts.fargs or {}, opts)
-    if not ok then
-        vim.notify(
-            "[greplace.nvim] " .. cmd .. " command error\n" .. tostring(err),
-            vim.log.levels.ERROR
-        )
-    end
 end
 
 return M
