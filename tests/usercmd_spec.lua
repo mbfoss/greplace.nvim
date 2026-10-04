@@ -65,6 +65,78 @@ describe("greplace.util.usercmd", function()
         end)
         assert.are.same({ "inner" }, inner)
     end)
+
+    it("keeps an escaped trailing space in the argument being completed", function()
+        local seen = {}
+        usercmd.complete("a\\ ", "Gsearch a\\ ", function(cmd, rest, arg_lead)
+            seen.cmd, seen.rest, seen.arg_lead = cmd, rest, arg_lead
+            return {}
+        end)
+        -- The escaped space belongs to the argument, so nothing is settled
+        -- behind it: `a\ ` is the lead, not context.
+        assert.are.same({}, seen.rest)
+        assert.are.equal("a\\ ", seen.arg_lead)
+    end)
+
+    it("treats an unescaped trailing space as a new argument", function()
+        local seen = {}
+        usercmd.complete("", "Gsearch a ", function(cmd, rest, arg_lead)
+            seen.cmd, seen.rest, seen.arg_lead = cmd, rest, arg_lead
+            return {}
+        end)
+        assert.are.same({ "a" }, seen.rest)
+        assert.are.equal("", seen.arg_lead)
+    end)
+end)
+
+describe("greplace.util.usercmd.escape_arg", function()
+    it("escapes whitespace and backslash only", function()
+        assert.equals("a\\ b", usercmd.escape_arg("a b"))
+        assert.equals("a\\\tb", usercmd.escape_arg("a\tb"))
+        assert.equals("a\\\\b", usercmd.escape_arg("a\\b"))
+        -- Characters that are only special to Ex filenames, not to <f-args>,
+        -- must be left alone: escaping them would keep the backslash verbatim.
+        assert.equals("a%b#c|d\"e", usercmd.escape_arg("a%b#c|d\"e"))
+    end)
+
+    it("round-trips through <f-args> splitting", function()
+        vim.api.nvim_create_user_command("UsercmdSpecEcho", function() end, { nargs = "*" })
+        for _, name in ipairs({ "a b", "a\\b", "a\tb", "a b\\c d", "a%b" }) do
+            local parsed = vim.api.nvim_parse_cmd("UsercmdSpecEcho " .. usercmd.escape_arg(name), {})
+            assert.equals(name, parsed.args[1])
+        end
+    end)
+end)
+
+describe("greplace.util.usercmd.complete_filename", function()
+    local tmp, cwd
+
+    before_each(function()
+        cwd = vim.fn.getcwd()
+        tmp = vim.fn.tempname()
+        vim.fn.mkdir(vim.fs.joinpath(tmp, "my dir"), "p")
+        vim.fn.mkdir(vim.fs.joinpath(tmp, "other"), "p")
+        vim.fn.chdir(tmp)
+    end)
+
+    after_each(function()
+        vim.fn.chdir(cwd)
+        vim.fn.delete(tmp, "rf")
+    end)
+
+    it("escapes the spaces getcompletion leaves in", function()
+        -- getcompletion accepts the escaped lead but returns the raw name.
+        assert.same({ "my\\ dir/" }, usercmd.complete_filename("my\\ d", "dir"))
+    end)
+
+    it("escapes every candidate for an empty lead", function()
+        assert.same({ "my\\ dir/", "other/" }, usercmd.complete_filename("", "dir"))
+    end)
+
+    it("matches when the lead ends in an escaped space", function()
+        -- getcompletion returns nothing for "my\ "; the helper rewrites it.
+        assert.same({ "my\\ dir/" }, usercmd.complete_filename("my\\ ", "dir"))
+    end)
 end)
 
 describe(":Gsearch / :Greplace", function()
@@ -338,6 +410,25 @@ describe(":Gsearch / :Greplace", function()
 
         -- A line that did not open with `--` is a query being typed.
         assert.are.same({}, complete("--fi", "Gsearch hit --fi"))
+    end)
+
+    it("completes a directory whose name holds a space, escaped", function()
+        write_file("my dir/x.txt", { "hit" })
+        local rgflags = require("greplace.rgflags")
+        ---@param lead string
+        ---@param line string
+        local function complete(lead, line)
+            return rgflags.complete(lead, line, #line)
+        end
+
+        -- The trailing escaped space is part of the value, so completion looks
+        -- inside it rather than treating the value as settled. The candidate
+        -- comes back escaped, so inserting it keeps one argument.
+        assert.are.same({ "my\\ dir/" },
+            complete("my\\ ", "Gsearch --dir my\\ "))
+        -- Glued to the flag, the `--dir=` comes back with the escaped value.
+        assert.are.same({ "--dir=my\\ dir/" },
+            complete("--dir=my\\ ", "Gsearch --dir=my\\ "))
     end)
 
     it("completes `:Greplace`'s subcommands, and nothing behind them", function()

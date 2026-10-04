@@ -387,7 +387,7 @@ end
 local function value_candidates(def, partial)
     local spec = def.complete
     if type(spec) == "function" then return spec(partial) end
-    if type(spec) == "string" then return vim.fn.getcompletion(partial, spec) end
+    if type(spec) == "string" then return usercmd.complete_filename(partial, spec) end
     return {}
 end
 
