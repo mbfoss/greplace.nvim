@@ -1,6 +1,9 @@
 # greplace.nvim
 
-> WORK IN PROGRESS
+> [!NOTE]
+> **Work in progress.** Stable and usable as it stands, but still evolving:
+> changes, including breaking ones, can land at any time. Pin a commit if you
+> need a fixed target.
 
 Project-wide search and replace by editing the grep results.
 
