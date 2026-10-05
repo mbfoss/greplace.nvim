@@ -43,5 +43,5 @@ luac.out
 /.vscode
 /.loop
 .luarc.json
-.ezdap.json
+.ndebug.json
 /.luarocks
