@@ -49,7 +49,7 @@ function Child:open(texts)
             matches[i] = { path = "/x/a.txt", relpath = "a.txt", lnum = i, text = text, subs = {} }
         end
         return require("greplace.panel").open(matches, {
-            query = "q", root = "/x", height = 10, on_write = function() end,
+            query = "q", root = "/x", ratio = 0.3, on_write = function() end,
         })
     ]], texts)
 end
@@ -68,7 +68,7 @@ function Child:open_hits(texts, hits)
             matches[i] = { path = "/x/a.txt", relpath = "a.txt", lnum = i, text = text, subs = subs }
         end
         return require("greplace.panel").open(matches, {
-            query = "q", root = "/x", height = 10, on_write = function() end,
+            query = "q", root = "/x", ratio = 0.3, on_write = function() end,
         })
     ]], texts, hits)
 end
@@ -504,7 +504,7 @@ describe("panel editing", function()
         local buf = child:lua([[
             local panel = require("greplace.panel")
             local buf = panel.open_loading({
-                query = "q", root = "/x", height = 10, on_write = function() end,
+                query = "q", root = "/x", ratio = 0.3, on_write = function() end,
             })
             vim.cmd("edit!")
             vim.cmd("new")

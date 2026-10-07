@@ -132,7 +132,7 @@ function M.open(query, opts)
         query    = query,
         flags    = flags,
         root     = root,
-        height   = config.height,
+        ratio    = config.height_ratio,
         on_write  = apply_edits,
         -- Deleting the panel ends the search that was filling it.
         on_delete = abort,
@@ -191,7 +191,7 @@ function M.open_qf()
         query    = "quickfix list",
         source   = "quickfix",
         root     = root,
-        height   = config.height,
+        ratio    = config.height_ratio,
         on_write  = apply_edits,
         on_delete = abort,
     })
@@ -216,7 +216,7 @@ function M.show()
         _notify("no list yet: search with :Gsearch <query>", vim.log.levels.WARN)
         return
     end
-    panel.show(bufnr, config.height)
+    panel.show(bufnr, config.height_ratio)
     return bufnr
 end
 

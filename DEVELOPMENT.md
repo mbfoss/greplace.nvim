@@ -110,6 +110,11 @@ before changing anything there. The short version:
   cannot walk back into a previous search.
 - The `≡` marker records where a line came from when the search ran, a buffer
   or the disk. It is not kept in step with which files are open afterwards.
+- The panel's window is pinned to a share of the editor by
+  `util/fixedwin.lua`, and a window outlives the buffer it shows: when the
+  panel buffer is wiped, `panel.lua` gives the fixed window up
+  (`drop_fixed_win`) instead of leaving it pinned -- and rigid -- around
+  whatever it shows next.
 
 ## Conventions
 

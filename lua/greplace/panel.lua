@@ -7,6 +7,8 @@ local M                = {}
 local config             = require("greplace.config").current
 local util               = require("greplace.util")
 local ui                 = require("greplace.util.ui")
+local fixedwin           = require("greplace.util.fixedwin")
+local hover              = require("greplace.util.hover")
 local marks              = require("greplace.panel.marks")
 local winbar             = require("greplace.panel.winbar")
 local draw               = require("greplace.panel.render")
@@ -19,6 +21,9 @@ local _buffer_name       = "greplace://greplace-matches"
 ---@class greplace.Panel
 ---@field state   greplace.PanelState?
 ---@field watcher greplace.Watcher
+---@field fixed   { win: integer, group: integer }?  the pinned window showing
+---                    this panel, while it has one (see `show`); a window
+---                    outlives its buffer, so it is kept here to be let go of
 
 --- Every panel buffer's record. Owned here: the other modules are handed the
 --- part of the state they work on, and never look one up.
@@ -180,7 +185,7 @@ end
 --- from, and the source line as it was when the panel rendered it -- what the
 --- write compares against, so it is worth being able to see.
 ---@param bufnr integer
-local function hover(bufnr)
+local function show_hover(bufnr)
     local row   = vim.api.nvim_win_get_cursor(0)[1]
     local entry = M.entry_at(bufnr, row - 1)
     if not entry then
@@ -189,17 +194,17 @@ local function hover(bufnr)
     end
 
     local loaded = util.find_buf(entry.path)
-    local lines  = {
+    hover.show(table.concat({
         "**" .. vim.fn.fnamemodify(entry.path, ":t") .. ":" .. entry.lnum .. "**",
         "",
         "- path: `" .. entry.path .. "`",
         "- relative: `" .. entry.relpath .. "`",
         "- line: `" .. entry.lnum .. "`",
         "- buffer: " .. (loaded and ("`" .. loaded .. "` (loaded)") or "not loaded"),
-    }
-    vim.lsp.util.open_floating_preview(lines, "markdown", {
-        border   = "rounded",
-        wrap     = false,
+    }, "\n"), {
+        syntax   = "markdown",
+        -- The panel's own hover: pressing `K` on another match replaces this
+        -- one rather than stacking a second window over it.
         focus_id = "greplace.hover",
     })
 end
@@ -459,6 +464,28 @@ local function panel_of(bufnr)
     return _panels[bufnr] or register(bufnr)
 end
 
+--- Let go of the pinned window that showed a panel, for the buffer going
+--- while the window stays: a wipe leaves the window showing another buffer,
+--- and the panel's claim on it has to go with the buffer. Left on, the fix
+--- options hold that window rigid for whatever it shows next, and the
+--- fixedwin autocommands go on re-pinning a window that is no longer a panel
+--- -- including sizing it down out of the way of the next panel's own window.
+---@param panel greplace.Panel
+local function drop_fixed_win(panel)
+    local fixed = panel.fixed
+    panel.fixed = nil
+    -- Gone already: fixedwin closes its autocommands with its window, and the
+    -- fix options went with the window.
+    if not fixed or not vim.api.nvim_win_is_valid(fixed.win) then return end
+    vim.api.nvim_del_augroup_by_id(fixed.group)
+    vim.wo[fixed.win].winfixheight = false
+    vim.wo[fixed.win].winfixwidth  = false
+    -- Set by `show` rather than by fixedwin, and as stale as the rest: the
+    -- window refusing to show another buffer is only wanted while it holds the
+    -- panel.
+    vim.wo[fixed.win].winfixbuf    = false
+end
+
 ---@param on_write  fun(bufnr:integer)  `:w` in the panel
 ---@param on_delete fun()?  the panel was deleted or wiped out
 ---@return integer bufnr
@@ -482,6 +509,8 @@ local function create_buf(on_write, on_delete)
     }, function()
         -- The list ends with the buffer: nothing is left to apply, and the
         -- search filling it has nowhere to land.
+        local panel = _panels[bufnr]
+        if panel then drop_fixed_win(panel) end
         _panels[bufnr] = nil
         pcall(vim.api.nvim_del_augroup_by_id, group)
         if on_delete then on_delete() end
@@ -601,7 +630,7 @@ local function create_buf(on_write, on_delete)
     end
 
     if config.keys.hover and config.keys.hover ~= "" then
-        vim.keymap.set("n", config.keys.hover, function() hover(bufnr) end, {
+        vim.keymap.set("n", config.keys.hover, function() show_hover(bufnr) end, {
             buffer = bufnr,
             desc   = "greplace: show the full details of the match under the cursor",
         })
@@ -624,22 +653,39 @@ local function create_buf(on_write, on_delete)
 end
 
 --- Show the panel in a split, reusing the window it already occupies.
----@param bufnr  integer
----@param height integer
-local function show(bufnr, height)
+---@param bufnr integer
+---@param ratio number  share of the editor's lines the panel takes (0..1)
+local function show(bufnr, ratio)
     local win = M.win(bufnr)
     if win then
         vim.api.nvim_set_current_win(win)
         return
     end
-    vim.cmd(string.format("botright %dsplit", height))
-    vim.api.nvim_win_set_buf(0, bufnr)
-    vim.wo[0][0].wrap       = false
-    vim.wo[0][0].signcolumn = "no"
-    vim.wo[0][0].spell      = config.spell
+    -- A share of the editor rather than a line count, so that the panel keeps
+    -- its size relative to the editor when that is resized -- and so that a
+    -- manual resize of the panel is the size kept (`:resize` moves the share
+    -- rather than being undone by the next layout change).
+    local panel_win, group = fixedwin.create_fixed_win(bufnr, {
+        axis  = "height",
+        ratio = ratio,
+        pos   = "botright",
+        enter = true,
+        -- The window closed, its autocommands with it: there is nothing left to
+        -- let go of when the buffer goes. No `panel_of`: the window can close
+        -- after the buffer is gone, and a record for a wiped buffer is not
+        -- one to go making.
+        on_delete = function()
+            local panel = _panels[bufnr]
+            if panel then panel.fixed = nil end
+        end,
+    })
+    panel_of(bufnr).fixed = { win = panel_win, group = group }
+    vim.wo[panel_win].wrap       = false
+    vim.wo[panel_win].signcolumn = "no"
+    vim.wo[panel_win].spell      = config.spell
     -- The panel keeps its window: <CR> (and anything else that opens a file)
     -- must land in a regular window rather than covering the results.
-    vim.wo[0][0].winfixbuf  = true
+    vim.wo[panel_win].winfixbuf  = true
     -- A new window has no winbar of its own, and none is drawn until the next
     -- edit otherwise.
     set_winbar(bufnr, state_of(bufnr))
@@ -656,8 +702,8 @@ end
 
 --- Put the panel back on screen (or move the cursor into it, if it is already
 --- there), leaving its contents -- unapplied edits included -- as they are.
----@param bufnr  integer
----@param height integer
+---@param bufnr integer
+---@param ratio number  share of the editor's lines the panel takes (0..1)
 M.show = show
 
 --- Take the panel off screen -- every window showing it in this tabpage, so
@@ -752,12 +798,12 @@ end
 
 --- Open the panel before there are any results, showing the query and that the
 --- search is running. `M.open` takes the same buffer over when it comes back.
----@param opts { query:string, root:string, flags:table?, height:integer, on_write:fun(bufnr:integer), on_delete:fun()? }
+---@param opts { query:string, root:string, flags:table?, ratio:number, on_write:fun(bufnr:integer), on_delete:fun()? }
 ---@return integer bufnr
 function M.open_loading(opts)
     local bufnr   = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
     panel_of(bufnr).state = new_state(opts)
-    show(bufnr, opts.height)
+    show(bufnr, opts.ratio)
     set_winbar(bufnr, state_of(bufnr), "searching ...")
     draw.set_status(bufnr, {
         { "searching for ", "GreplaceStatus" },
@@ -769,14 +815,14 @@ end
 
 --- Open (or reuse) the panel for a result set.
 ---@param matches  greplace.Match[]
----@param opts     { query:string, root:string, flags:table?, height:integer, truncated:boolean?, source:string?, on_write:fun(bufnr:integer), on_delete:fun()? }
+---@param opts     { query:string, root:string, flags:table?, ratio:number, truncated:boolean?, source:string?, on_write:fun(bufnr:integer), on_delete:fun()? }
 ---@return integer bufnr
 ---@return string? err  the list could not be rendered; the panel shows why and
 ---                     holds nothing editable
 function M.open(matches, opts)
     local bufnr = M.find_buf() or create_buf(opts.on_write, opts.on_delete)
     panel_of(bufnr).state = new_state(opts)
-    show(bufnr, opts.height)
+    show(bufnr, opts.ratio)
     return bufnr, render_list(bufnr, matches)
 end
 

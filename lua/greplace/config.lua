@@ -19,7 +19,10 @@ local M = {}
 ---                     `false` to leave `K` alone)
 
 ---@class greplace.Config
----@field height integer  height of the result split
+---@field height_ratio number  share of the editor's lines the result split
+---                            takes (0..1); the split keeps that share when the
+---                            editor is resized, and a manual `:resize` of the
+---                            panel moves the share rather than being undone
 ---@field limit  integer  maximum matches collected per search
 ---@field winbar boolean  show the query and the panel's counts in a winbar
 ---@field path_width integer  greatest display width the `file:line` column may
@@ -32,7 +35,7 @@ local M = {}
 
 ---@type greplace.Config
 local _defaults = {
-    height = 15,
+    height_ratio = 0.4,
     limit  = 10000,
     winbar = true,
     path_width = 60,

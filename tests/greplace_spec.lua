@@ -141,7 +141,7 @@ describe("greplace", function()
         assert.equals(1, vim.fn.filereadable(matches[1].path))
 
         local pbuf = panel.open(matches, {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         edit_row(pbuf, 0, { "HIT here" })
         local result = apply.run(panel.regions(pbuf))
@@ -175,7 +175,7 @@ describe("greplace", function()
     it("renders matched lines verbatim, location as virtual text", function()
         write_file("a.txt", { "    hit one" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         assert.same({ "    hit one" }, vim.api.nvim_buf_get_lines(pbuf, 0, -1, false))
 
@@ -197,7 +197,7 @@ describe("greplace", function()
         vim.api.nvim_buf_set_lines(cbuf, 0, -1, false, { "hit modified" })
 
         local pbuf  = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         local ns    = vim.api.nvim_get_namespaces()["greplace.anchor"]
         local marks = vim.api.nvim_buf_get_extmarks(pbuf, ns, 0, -1, { details = true })
@@ -226,7 +226,7 @@ describe("greplace", function()
         local b = write_file("sub/b.txt", { "x", "hit two" })
 
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         edit_row(pbuf, 0, { "HIT one" })
         edit_row(pbuf, 1, { "HIT two" })
@@ -251,7 +251,7 @@ describe("greplace", function()
         local b = write_file("b.txt", { "hit two" })
 
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         edit_row(pbuf, 0, { "HIT one" })
         edit_row(pbuf, 1, { "HIT two" })
@@ -278,7 +278,7 @@ describe("greplace", function()
         local util = require("greplace.util")
 
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         -- a.txt is edited, b.txt only has its match deleted, c.txt is untouched.
         edit_row(pbuf, 0, { "HIT one" })
@@ -299,7 +299,7 @@ describe("greplace", function()
     it("splits a source line when a region grows", function()
         local a = write_file("a.txt", { "one hit", "tail" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         edit_row(pbuf, 0, { "first", "second" })
 
@@ -311,7 +311,7 @@ describe("greplace", function()
     it("leaves the source alone for a match deleted from the panel", function()
         local a = write_file("a.txt", { "hit one", "hit two", "tail" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         -- Drop the first result line; its anchor collapses onto the second.
         vim.api.nvim_buf_set_lines(pbuf, 0, 1, false, {})
@@ -331,7 +331,7 @@ describe("greplace", function()
     it("drops the location of a removed line, leaving the rest in place", function()
         write_file("a.txt", { "hit one", "hit two", "hit three" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         assert.same({ "a.txt:1", "a.txt:2", "a.txt:3" }, locations(pbuf))
 
@@ -347,7 +347,7 @@ describe("greplace", function()
     it("leaves the last source line alone when the last panel line goes", function()
         local a = write_file("a.txt", { "hit one", "hit two" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         delete_row(pbuf, 1)
         assert.same({ "a.txt:1", false }, locations(pbuf))
@@ -362,7 +362,7 @@ describe("greplace", function()
     it("changes nothing when the panel is emptied", function()
         local a = write_file("a.txt", { "hit one", "keep", "hit two" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         -- `ggdG` leaves one empty line behind, which means "drop every match",
         -- not "blank out the last one".
@@ -381,7 +381,7 @@ describe("greplace", function()
     it("keeps line numbers right when an edit sits below a dropped match", function()
         local a = write_file("a.txt", { "hit one", "mid", "hit two" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         -- Drop the first match, split the second: nothing was removed from the
         -- file, so the second match's line number must not shift up.
@@ -397,7 +397,7 @@ describe("greplace", function()
     it("keeps later line numbers correct after a region grows", function()
         local a = write_file("a.txt", { "hit one", "mid", "hit two" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         edit_row(pbuf, 0, { "A", "B" })
 
@@ -410,7 +410,7 @@ describe("greplace", function()
     it("skips a region whose source line moved underneath it", function()
         local a = write_file("a.txt", { "hit one" })
         local pbuf = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         local abuf = assert(require("greplace.util").ensure_buf(a))
         vim.api.nvim_buf_set_lines(abuf, 0, -1, false, { "someone else edited this" })
@@ -425,10 +425,10 @@ describe("greplace", function()
     it("reuses the panel buffer across searches", function()
         write_file("a.txt", { "hit one" })
         local first = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         local second = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         assert.equals(first, second)
     end)
@@ -437,7 +437,7 @@ describe("greplace", function()
         write_file("a.txt", { "hit one", "hit two" })
         write_file("b.txt", { "hit three" })
         local bufnr = panel.open(run_search("hit"), {
-            query = "hit", root = _root, height = 10, on_write = function() end,
+            query = "hit", root = _root, ratio = 0.3, on_write = function() end,
         })
         assert.same({ files = 2, lines = 3, changes = 0, changed_files = 0 }, panel.stats(bufnr))
 
@@ -643,7 +643,7 @@ describe("greplace", function()
         assert.equals(1, matches[1].lnum)
 
         local pbuf = panel.open(matches, {
-            query = "^$", root = _root, height = 10, on_write = function() end,
+            query = "^$", root = _root, ratio = 0.3, on_write = function() end,
         })
         assert.same({ "" }, vim.api.nvim_buf_get_lines(pbuf, 0, -1, false))
 
