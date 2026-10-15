@@ -978,7 +978,7 @@ end
 --- after every colorscheme change, both of which clear such links.
 function M.setup_highlights()
     local defaults = {
-        GreplaceLocation        = { link = "@namespace" },
+        GreplaceLocation        = { link = "@module" },
         GreplaceBufferIndicator = { link = "Special" },
         -- `NonText` rather than `Comment`: the plain `│` is scaffolding, and
         -- the dimmer it is, the more the `│` of an edited line stands out.

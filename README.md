@@ -259,7 +259,7 @@ warning, since `setup()` would otherwise accept a misspelling in silence.
 
 | Group | Default | Meaning |
 | --- | --- | --- |
-| `GreplaceLocation` | `@namespace` | `file:line` of a match |
+| `GreplaceLocation` | `@module` | `file:line` of a match |
 | `GreplaceBufferIndicator` | `Special` | the `≡` in front of a match found in a buffer |
 | `GreplaceSeparator` | `NonText` | the `│` between location and text |
 | `GreplaceStatus` | `Comment` | the winbar's counts and the panel's status text |
