@@ -39,6 +39,12 @@ function Child:lua(code, ...)
     return vim.rpcrequest(self.chan, "nvim_exec_lua", code, { ... })
 end
 
+--- Take the panel's normal-mode `o` -- the open-without-focus mapping -- out
+--- of the way, so that the edit it stands in front of can be typed as before.
+function Child:unmap_o()
+    self:lua([[pcall(vim.keymap.del, "n", "o", { buffer = 0 })]])
+end
+
 --- Open a panel on `texts`, one match per line of `a.txt`.
 ---@param texts string[]
 ---@return integer bufnr  in the child
@@ -173,9 +179,10 @@ describe("panel editing", function()
 
     it("takes back a line opened below a match", function()
         child:open({ "one", "two" })
-        -- `o` is the panel's open-without-focus mapping; a line below the
-        -- cursor is opened with `gjO` instead.
-        child:feed("ggjoextra<Esc>")
+        -- Normal-mode `o` is the panel's open-without-focus mapping, so it is
+        -- out of the way here: these specs are about the edit itself.
+        child:unmap_o()
+        child:feed("ggoextra<Esc>")
         assert.same({ "one", "two" }, child:lines())
         assert.equals(1, #child:notes())
     end)
@@ -263,11 +270,10 @@ describe("panel editing", function()
 
     it("takes back a line opened in Insert mode, and lets typing go on", function()
         child:open({ "one", "two" })
-        -- `o` is the panel's open-without-focus mapping, so a line below the
-        -- cursor is opened with `gjO` -- same break in front of the next line.
-        child:feed("ggjO")
+        child:unmap_o()
+        child:feed("ggo")
         assert.same({ "one", "two" }, child:lines())
-        -- `O` opens the new line in front of the next one, taking its anchor;
+        -- `o` opens the new line in front of the next one, taking its anchor;
         -- the cursor is left where that break was.
         assert.same({ 2, 0 }, child:cursor())
         child:feed("X<Esc>")

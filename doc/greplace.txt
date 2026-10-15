@@ -51,12 +51,7 @@ the panel undoes the write there too, and writing again reverts the source.
 **lazy.nvim**
 
 >lua
-    {
-      "mbfoss/greplace.nvim",
-      config = function()
-        require("greplace").setup()
-      end,
-    }
+    { "mbfoss/greplace.nvim", cmd = { "Gsearch", "Greplace" } }
 <
 
 `setup()` is optional; the commands register themselves and nothing is loaded
@@ -271,7 +266,7 @@ count past the last edit stops there. Each is a jump, so `''` and `<C-o>` come
 back.
 
 None of these mappings are configurable. Each is buffer-local to the panel, so
-it binds nothing in a user's other buffers.
+it binds nothing in a user’s other buffers.
 
 The `file:line` column is capped at `path_width` display cells and cropped on
 the left; `K` shows the whole path.

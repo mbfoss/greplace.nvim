@@ -42,12 +42,7 @@ the panel undoes the write there too, and writing again reverts the source.
 **lazy.nvim**
 
 ```lua
-{
-  "mbfoss/greplace.nvim",
-  config = function()
-    require("greplace").setup()
-  end,
-}
+{ "mbfoss/greplace.nvim", cmd = { "Gsearch", "Greplace" } }
 ```
 
 `setup()` is optional; the commands register themselves and nothing is loaded
