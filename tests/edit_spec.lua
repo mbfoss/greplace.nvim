@@ -173,7 +173,9 @@ describe("panel editing", function()
 
     it("takes back a line opened below a match", function()
         child:open({ "one", "two" })
-        child:feed("ggoextra<Esc>")
+        -- `o` is the panel's open-without-focus mapping; a line below the
+        -- cursor is opened with `gjO` instead.
+        child:feed("ggjoextra<Esc>")
         assert.same({ "one", "two" }, child:lines())
         assert.equals(1, #child:notes())
     end)
@@ -261,9 +263,11 @@ describe("panel editing", function()
 
     it("takes back a line opened in Insert mode, and lets typing go on", function()
         child:open({ "one", "two" })
-        child:feed("ggo")
+        -- `o` is the panel's open-without-focus mapping, so a line below the
+        -- cursor is opened with `gjO` -- same break in front of the next line.
+        child:feed("ggjO")
         assert.same({ "one", "two" }, child:lines())
-        -- `o` opens the new line in front of the next one, taking its anchor;
+        -- `O` opens the new line in front of the next one, taking its anchor;
         -- the cursor is left where that break was.
         assert.same({ 2, 0 }, child:cursor())
         child:feed("X<Esc>")

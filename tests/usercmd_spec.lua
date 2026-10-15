@@ -288,10 +288,24 @@ describe(":Gsearch / :Greplace", function()
 
     it("opens the source of the line under the cursor on <CR>", function()
         write_file("a.txt", { "one", "alpha beta", "three" })
-        local bufnr = assert(run("Gsearch alpha"))
+        assert(run("Gsearch alpha"))
         vim.api.nvim_win_set_cursor(0, { 1, 6 })
         vim.api.nvim_feedkeys(
             vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
+
+        -- The file is where the cursor lands, and it opens in its own window
+        -- rather than over the panel.
+        assert.are.equal(_root .. "/a.txt",
+            vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()))
+        assert.are.same({ 2, 6 }, vim.api.nvim_win_get_cursor(0))
+    end)
+
+    it("opens the source on o and stays in the panel", function()
+        write_file("a.txt", { "one", "alpha beta", "three" })
+        local bufnr = assert(run("Gsearch alpha"))
+        vim.api.nvim_win_set_cursor(0, { 1, 6 })
+        vim.api.nvim_feedkeys(
+            vim.api.nvim_replace_termcodes("o", true, false, true), "x", false)
 
         -- The cursor stays in the panel, which keeps its own window rather
         -- than being opened over.

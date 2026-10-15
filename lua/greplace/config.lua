@@ -11,13 +11,6 @@ local M = {}
 -- (`local config = require("greplace.config").current`).
 -- ---------------------------------------------------------------------------
 
----@class greplace.Keys
----@field open  string  panel mapping that opens the source of the line under
----                     the cursor (empty or `false` to leave `<CR>` alone)
----@field hover string  panel mapping that shows the full details of the match
----                     under the cursor in a floating window (empty or
----                     `false` to leave `K` alone)
-
 ---@class greplace.Config
 ---@field height_ratio number  share of the editor's lines the result split
 ---                            takes (0..1); the split keeps that share when the
@@ -29,9 +22,8 @@ local M = {}
 ---                           take in the panel; a longer location is cropped on
 ---                           the left, so the file name and line number -- the
 ---                           telling end of it -- stay visible. The full path is
----                           always available through the `hover` mapping.
+---                           always available through the `K` mapping.
 ---@field spell boolean  enable spell checking in the panel window
----@field keys   greplace.Keys
 
 ---@type greplace.Config
 local _defaults = {
@@ -40,10 +32,6 @@ local _defaults = {
     winbar = true,
     path_width = 60,
     spell  = false,
-    keys   = {
-        open  = "<CR>",
-        hover = "K",
-    },
 }
 
 --- The live settings, at the defaults until `setup()` applies the user's.

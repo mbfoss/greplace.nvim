@@ -161,10 +161,12 @@ function M.entry_at(bufnr, row)
 end
 
 --- Open the source of the line under the cursor, in a regular window (never
---- over the panel itself), on the line the match came from. The cursor stays
---- in the panel, so that going down the list shows one match after another.
+--- over the panel itself), on the line the match came from. Without `focus`
+--- the cursor stays in the panel, so that going down the list shows one match
+--- after another; with it, the file is where the cursor lands.
 ---@param bufnr integer
-local function jump(bufnr)
+---@param focus? boolean
+local function jump(bufnr, focus)
     local pos = vim.api.nvim_win_get_cursor(0)
     local row, col = pos[1], pos[2]
     local entry, anchor_row = M.entry_at(bufnr, row - 1)
@@ -175,7 +177,7 @@ local function jump(bufnr)
     -- The panel line is the source line verbatim, so on the anchor's own row
     -- the column carries over; on a row the user added below it, it does not.
     local target_col = anchor_row == row - 1 and col or 0
-    if ui.smart_open_file(entry.path, entry.lnum, target_col, false) == -1 then
+    if ui.smart_open_file(entry.path, entry.lnum, target_col, focus) == -1 then
         vim.notify("greplace: cannot open " .. entry.relpath, vim.log.levels.ERROR)
     end
 end
@@ -623,23 +625,28 @@ local function create_buf(on_write, on_delete)
         end,
     })
 
-    if config.keys.open and config.keys.open ~= "" then
-        vim.keymap.set("n", config.keys.open, function() jump(bufnr) end, {
-            buffer = bufnr,
-            desc   = "greplace: open the source of the line under the cursor",
-        })
-    end
+    -- The panel's mappings are fixed: the panel is a scratch buffer over the
+    -- user's own files, so `<CR>` and `K` mean here what they mean in a
+    -- buffer's own window rather than being a knob to bind.
+    vim.keymap.set("n", "<CR>", function() jump(bufnr, true) end, {
+        buffer = bufnr,
+        desc   = "greplace: open the source of the line under the cursor",
+    })
 
-    if config.keys.hover and config.keys.hover ~= "" then
-        vim.keymap.set("n", config.keys.hover, function() show_hover(bufnr) end, {
-            buffer = bufnr,
-            desc   = "greplace: show the full details of the match under the cursor",
-        })
-    end
+    -- `o` for the same jump with the cursor left in the panel, so the list can
+    -- be walked with the file following along. Normal-mode `o` (add a line)
+    -- is one of the edits the panel takes straight back out, so there is
+    -- nothing here it can shadow.
+    vim.keymap.set("n", "o", function() jump(bufnr, false) end, {
+        buffer = bufnr,
+        desc   = "greplace: show the source of the line under the cursor, staying in the panel",
+    })
 
-    -- Not among `config.keys`: `]c`/`[c` mean "the next change" wherever they
-    -- are bound, and they are the panel's own, taking nothing a user might
-    -- want back -- unlike `<CR>` and `K`.
+    vim.keymap.set("n", "K", function() show_hover(bufnr) end, {
+        buffer = bufnr,
+        desc   = "greplace: show the full details of the match under the cursor",
+    })
+
     vim.keymap.set("n", "]c", function() goto_change(bufnr, 1) end, {
         buffer = bufnr,
         desc   = "greplace: move to the next edited line",

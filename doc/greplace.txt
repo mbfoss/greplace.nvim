@@ -247,8 +247,10 @@ MAPPINGS                                                    *greplace-keymaps*
   ----------------------------------- -----------------------------------
   <CR>                                open the source of the line under
                                       the cursor, at that line and
-                                      column, keeping the cursor in the
-                                      panel
+                                      column, and move into that window
+
+  o                                   the same, but leave the cursor in
+                                      the panel
 
   K                                   show the match under the cursor in
                                       a floating window: its full path,
@@ -261,13 +263,15 @@ MAPPINGS                                                    *greplace-keymaps*
 
   [c                                  move to the previous edited line
   -----------------------------------------------------------------------
-The file opens in a regular window, never over the panel, so `j<CR>` steps
-through the matches. Set `keys.open` or `keys.hover` to another key, or to
-`false`, to change or drop a mapping.
+The file opens in a regular window, never over the panel, so `jo` steps through
+the matches: each one is shown as the cursor moves down the list.
 
 `]c` and `[c` step through the lines marked `•` and take a count (`3]c`); a
 count past the last edit stops there. Each is a jump, so `''` and `<C-o>` come
-back. They are fixed, not configurable.
+back.
+
+None of these mappings are configurable. Each is buffer-local to the panel, so
+it binds nothing in a user's other buffers.
 
 The `file:line` column is capped at `path_width` display cells and cropped on
 the left; `K` shows the whole path.
@@ -281,7 +285,7 @@ mean the obvious thing:
 - **change the line** → the source line is rewritten
 - **delete the line** (`dd`) → that match is dropped: its source line is left
     exactly as it is
-- **add a line** (`o`, a linewise `p`, `<CR>` mid-line, `:s/x/\r/`) → the line
+- **add a line** (`O`, a linewise `p`, `<CR>` mid-line, `:s/x/\r/`) → the line
     is taken out again, with a warning
 - **join two lines** (`J`, a charwise delete across a line break, `<BS>` at the
     start of a line) → they are split back apart, with a warning
@@ -315,10 +319,6 @@ and the entries take the applied text.
       winbar       = true,  -- show the panel's counts in a winbar
       path_width   = 60,    -- greatest width of the `file:line` column, in cells
       spell        = false, -- spell check the panel's buffer
-      keys = {
-        open  = "<CR>", -- open the source of the line under the cursor
-        hover = "K",    -- show the full details of the match under the cursor
-      },
     })
 <
 
