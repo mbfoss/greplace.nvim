@@ -217,7 +217,7 @@ describe("greplace", function()
 
         -- The winbar does not count them: which files are open changes after
         -- the search, and the count would go stale.
-        local winbar = vim.wo[vim.fn.bufwinid(pbuf)].winbar
+        local winbar = vim.wo[vim.fn.bufwinid(pbuf)][0].winbar
         assert.is_nil(winbar:find("open", 1, true))
     end)
 
@@ -465,7 +465,7 @@ describe("greplace", function()
             return next(panel.state(bufnr).list.entries) ~= nil
         end, 20))
 
-        local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        local winbar = vim.wo[vim.fn.bufwinid(bufnr)][0].winbar
         assert.is_truthy(winbar:find("1 file (0 changed)  1 line (0 changed)", 1, true))
         assert.is_nil(winbar:find("hit", 1, true))
         assert.is_nil(winbar:find("open", 1, true))
@@ -483,13 +483,13 @@ describe("greplace", function()
             return next(panel.state(bufnr).list.entries) ~= nil
         end, 20))
 
-        local winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        local winbar = vim.wo[vim.fn.bufwinid(bufnr)][0].winbar
         assert.is_truthy(winbar:find("limit of 5 reached", 1, true))
 
         -- Removing a line takes the list below the limit, and the note with
         -- it; putting the line back brings the note back.
         local function limit_shown()
-            return vim.wo[vim.fn.bufwinid(bufnr)].winbar:find("limit of", 1, true) ~= nil
+            return vim.wo[vim.fn.bufwinid(bufnr)][0].winbar:find("limit of", 1, true) ~= nil
         end
         vim.api.nvim_buf_call(bufnr, function() vim.cmd("normal! ggdd") end)
         assert.is_true(vim.wait(1000, function() return not limit_shown() end, 10))
@@ -503,7 +503,7 @@ describe("greplace", function()
             local st = panel.state(bufnr)
             return st ~= nil and not st.origin.truncated and next(st.list.entries) ~= nil
         end, 20))
-        winbar = vim.wo[vim.fn.bufwinid(bufnr)].winbar
+        winbar = vim.wo[vim.fn.bufwinid(bufnr)][0].winbar
         assert.is_nil(winbar:find("limit", 1, true))
     end)
 
@@ -547,7 +547,7 @@ describe("greplace", function()
         end, 20))
 
         local winid  = vim.fn.bufwinid(bufnr)
-        local drawn  = vim.api.nvim_eval_statusline(vim.wo[winid].winbar,
+        local drawn  = vim.api.nvim_eval_statusline(vim.wo[winid][0].winbar,
             { winid = winid }).str
         assert.is_truthy(drawn:find("%f%{getcwd()}zz", 1, true))
     end)

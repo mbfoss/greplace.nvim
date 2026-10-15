@@ -478,12 +478,13 @@ local function drop_fixed_win(panel)
     -- fix options went with the window.
     if not fixed or not vim.api.nvim_win_is_valid(fixed.win) then return end
     vim.api.nvim_del_augroup_by_id(fixed.group)
-    vim.wo[fixed.win].winfixheight = false
-    vim.wo[fixed.win].winfixwidth  = false
+    local lwo = vim.wo[fixed.win][0]
+    lwo.winfixheight = false
+    lwo.winfixwidth  = false
     -- Set by `show` rather than by fixedwin, and as stale as the rest: the
     -- window refusing to show another buffer is only wanted while it holds the
     -- panel.
-    vim.wo[fixed.win].winfixbuf    = false
+    lwo.winfixbuf    = false
 end
 
 ---@param on_write  fun(bufnr:integer)  `:w` in the panel
@@ -600,7 +601,7 @@ local function create_buf(on_write, on_delete)
             vim.bo[bufnr].modifiable = true
             for _, win in ipairs(vim.api.nvim_list_wins()) do
                 if vim.api.nvim_win_get_buf(win) == bufnr then
-                    vim.wo[win].winbar = ""
+                    vim.wo[win][0].winbar = ""
                 end
             end
             _panels[bufnr].watcher.attach()
@@ -680,12 +681,13 @@ local function show(bufnr, ratio)
         end,
     })
     panel_of(bufnr).fixed = { win = panel_win, group = group }
-    vim.wo[panel_win].wrap       = false
-    vim.wo[panel_win].signcolumn = "no"
-    vim.wo[panel_win].spell      = config.spell
+    local lwo = vim.wo[panel_win][0]
+    lwo.wrap       = false
+    lwo.signcolumn = "no"
+    lwo.spell      = config.spell
     -- The panel keeps its window: <CR> (and anything else that opens a file)
     -- must land in a regular window rather than covering the results.
-    vim.wo[panel_win].winfixbuf  = true
+    lwo.winfixbuf  = true
     -- A new window has no winbar of its own, and none is drawn until the next
     -- edit otherwise.
     set_winbar(bufnr, state_of(bufnr))

@@ -51,8 +51,8 @@ function M.set_winbar(bufnr, text, st, truncated)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
         -- Only when it differs: setting an option redraws the bar, and this
         -- runs behind every edit.
-        if vim.api.nvim_win_get_buf(win) == bufnr and vim.wo[win].winbar ~= bar then
-            vim.wo[win].winbar = bar
+        if vim.api.nvim_win_get_buf(win) == bufnr and vim.wo[win][0].winbar ~= bar then
+            vim.wo[win][0].winbar = bar
         end
     end
 end

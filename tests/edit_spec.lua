@@ -497,7 +497,7 @@ describe("panel editing", function()
         assert.is_true(child:lua(
             "return require('greplace.panel').is_panel(vim.api.nvim_get_current_buf())"))
         assert.is_false(child:lua("return vim.bo.modified"))
-        assert.is_true(child:lua("return vim.wo.winbar ~= ''"))
+        assert.is_true(child:lua("return vim.wo[0][0].winbar ~= ''"))
     end)
 
     it("can be shown again after a reload left it with no list", function()
@@ -521,7 +521,7 @@ describe("panel editing", function()
         assert.same({ "one", "two" }, child:lines())
         assert.is_true(child:lua(
             "return require('greplace.panel').state(vim.api.nvim_get_current_buf()).message == nil"))
-        assert.is_false(child:lua("return vim.wo.winbar:find('render failed', 1, true) ~= nil"))
+        assert.is_false(child:lua("return vim.wo[0][0].winbar:find('render failed', 1, true) ~= nil"))
     end)
 
     it("takes a new list in a reloaded panel", function()

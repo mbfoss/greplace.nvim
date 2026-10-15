@@ -32,14 +32,9 @@ local _AXES = {
     },
 }
 
--- `vim.wo[win].opt = val` also sets the global default new windows inherit
----@param win integer
----@param opt string
----@param val any
-local function win_setlocal(win, opt, val)
-    vim.api.nvim_set_option_value(opt, val, { win = win, scope = "local" })
-end
-
+-- Window options are written local-first: `vim.wo[win][0][opt] = val` touches
+-- `win` alone, where `vim.wo[win][opt] = val` acts like `:set` and would also
+-- write the global default every new window inherits.
 ---@param win integer
 ---@param opt string
 local function win_getopt(win, opt)
@@ -99,7 +94,7 @@ function M.create_fixed_win(buf, opts)
     local win = vim.api.nvim_open_win(buf, opts.enter or false, { split = split, win = -1 }) ---@type integer?
     assert(win)
 
-    win_setlocal(win, spec.fix, true)
+    vim.wo[win][0][spec.fix] = true
 
     -- last-known ratio, updated on user resizes
     local state = { ratio = ratio }
@@ -176,12 +171,13 @@ function M.create_fixed_win(buf, opts)
             or (pinnable(cross, layout) and cross)
             or nil
         local on = active == spec
-        if win_getopt(win, spec.fix) ~= on then win_setlocal(win, spec.fix, on) end
+        local lwo = vim.wo[win][0]
+        if win_getopt(win, spec.fix) ~= on then lwo[spec.fix] = on end
         if active == cross and not win_getopt(win, cross.fix) then
-            win_setlocal(win, cross.fix, true)
+            lwo[cross.fix] = true
             cross_owned = true
         elseif active ~= cross and cross_owned then
-            win_setlocal(win, cross.fix, false)
+            lwo[cross.fix] = false
             cross_owned = false
         end
     end

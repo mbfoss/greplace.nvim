@@ -3,8 +3,8 @@ local M = {}
 local function _is_regular_win(winid)
     if not vim.api.nvim_win_is_valid(winid) then return false end
     local cfg = vim.api.nvim_win_get_config(winid)
-    if cfg.relative ~= "" then return false end      -- skip popups
-    if vim.wo[winid].winfixbuf then return false end -- skip fixed windows
+    if cfg.relative ~= "" then return false end         -- skip popups
+    if vim.wo[winid][0].winfixbuf then return false end -- skip fixed windows
     return true
 end
 
@@ -45,7 +45,7 @@ local function _get_regular_window()
     local newwin = vim.api.nvim_get_current_win()
     -- A split inherits window-local options from its parent, so splitting off a
     -- winfixbuf panel yields a winfixbuf window too; clear it so a file can load.
-    vim.wo[newwin].winfixbuf = false
+    vim.wo[newwin][0].winfixbuf = false
     return newwin
 end
 

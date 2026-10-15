@@ -101,9 +101,10 @@ function M.show(text, opts)
         max_height = max_height,
     })
 
+    local lwo = vim.wo[win][0]
     if opts.syntax == "markdown" then
-        vim.wo[win].conceallevel = 3
-        vim.wo[win].concealcursor = "nv"
+        lwo.conceallevel = 3
+        lwo.concealcursor = "nv"
     end
 
     -- A repeat call focuses the open hover, already sized.
@@ -115,8 +116,8 @@ function M.show(text, opts)
 
     -- A new window inherits its opener's options: opened from a scrollbound
     -- window, the hover would scroll and move along with it.
-    vim.wo[win].scrollbind = false
-    vim.wo[win].cursorbind = false
+    lwo.scrollbind = false
+    lwo.cursorbind = false
 
     -- `q` comes with the preview; `<Esc>` is the other key a hover is expected
     -- to answer to. Both only matter once the hover has been focused.
