@@ -3,6 +3,10 @@ local M = {}
 
 -- A split pinned along one axis to a ratio of the editor lines/columns,
 -- re-applied on layout changes.
+--
+-- Window options are written local-first: `vim.wo[win][0][opt] = val` touches
+-- `win` alone, where `vim.wo[win][opt] = val` acts like `:set` and would also
+-- write the global default every new window inherits.
 
 ---@class greplace.util.fixedwin.AxisSpec
 ---@field sides {topleft: string, botright: string}  nvim_open_win() `split` direction per placement
@@ -32,9 +36,6 @@ local _AXES = {
     },
 }
 
--- Window options are written local-first: `vim.wo[win][0][opt] = val` touches
--- `win` alone, where `vim.wo[win][opt] = val` acts like `:set` and would also
--- write the global default every new window inherits.
 ---@param win integer
 ---@param opt string
 local function win_getopt(win, opt)
