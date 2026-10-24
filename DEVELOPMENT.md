@@ -24,8 +24,8 @@ lua/greplace/
   util.lua, util/          buffer/path helpers, process spawning, UI helpers
 doc/greplace.txt           vim help file
 tests/                     busted specs, run inside Neovim
-scripts/record-demos.sh    records demo/scenes/*.scene into demo/out/
-demo/                      scene files, a minimal init, and the workspace they search
+scripts/record-demos.sh    records data/demo/scenes/*.scene into data/demo/out/
+data/demo/                 scene files, a minimal init, and the workspace they search
 ```
 
 ## Running the tests
@@ -58,18 +58,18 @@ and real keystrokes, and a spec run directly under busted has neither. Use its
 
 The recordings linked from the README are made by
 [nvim-demo](https://github.com/mbfoss/nvim-demo-generator) from
-`demo/scenes/*.scene`:
+`data/demo/scenes/*.scene`:
 
 ```sh
 scripts/record-demos.sh                         # every scene
-scripts/record-demos.sh demo/scenes/01-*.scene  # just one
+scripts/record-demos.sh data/demo/scenes/01-*.scene  # just one
 ```
 
-Each scene searches a fresh copy of `demo/work/`, so a take never sees the
+Each scene searches a fresh copy of `data/demo/work/`, so a take never sees the
 previous one's edits. The script finds the tool in `~/src/nvim-demo-generator`,
 or clones it into `$XDG_CACHE_HOME`; set `NVIM_DEMO` to a checkout's
 `bin/nvim-demo` to pick another. It needs `nvim`, `agg`, `pyte` and `ripgrep`.
-The GIFs go in `demo/out/` (ignored) and are committed to the `assets` branch,
+The GIFs go in `data/demo/out/` (ignored) and are committed to the `assets` branch,
 where the README's links point.
 
 ## How the panel works

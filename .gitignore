@@ -47,4 +47,4 @@ luac.out
 /.luarocks
 
 # Recorded demos: the GIFs live on the assets branch.
-/demo/out/
+/data/demo/out/

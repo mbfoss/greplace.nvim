@@ -1,8 +1,8 @@
 -- Minimal, self-contained init for the README recordings.
 local demo = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
-local root = vim.fn.fnamemodify(demo .. "/..", ":p")
+local root = vim.fn.fnamemodify(demo .. "/../..", ":p")
 
-vim.opt.rtp:append(demo) -- demo/colors/greplace.lua
+vim.opt.rtp:append(demo) -- data/demo/colors/greplace.lua
 vim.opt.rtp:append(root) -- the plugin itself
 
 vim.o.number = true

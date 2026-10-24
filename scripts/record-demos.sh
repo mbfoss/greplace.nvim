@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
-# Record the README demos from demo/scenes/*.scene with nvim-demo.
+# Record the README demos from data/demo/scenes/*.scene with nvim-demo.
 #
 #   scripts/record-demos.sh                         # every scene
-#   scripts/record-demos.sh demo/scenes/01-*.scene  # just one
+#   scripts/record-demos.sh data/demo/scenes/01-*.scene  # just one
 #
-# Each scene writes its GIF and cast to demo/out/. Needs nvim, agg, pyte and
+# Each scene writes its GIF and cast to data/demo/out/. Needs nvim, agg, pyte and
 # ripgrep. nvim-demo (https://github.com/mbfoss/nvim-demo-generator) is used
 # from ~/src when that checkout is there, and cloned into
 # $XDG_CACHE_HOME/greplace.nvim when it is not. Set NVIM_DEMO to a checkout's
@@ -29,16 +29,16 @@ else
     fi
 fi
 
-# Every take searches a fresh copy of demo/work, so a recording never sees the
+# Every take searches a fresh copy of data/demo/work, so a recording never sees the
 # previous one's edits and the panel shows paths relative to the project root.
 work=$cache/work
 rm -rf "$work"
 mkdir -p "$work"
-cp -R "$root/demo/work/." "$work/"
+cp -R "$root/data/demo/work/." "$work/"
 
-mkdir -p "$root/demo/out"
+mkdir -p "$root/data/demo/out"
 if [ "$#" -eq 0 ]; then
-    set -- "$root"/demo/scenes/*.scene
+    set -- "$root"/data/demo/scenes/*.scene
 fi
 
 for scene in "$@"; do
